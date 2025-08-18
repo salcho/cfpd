@@ -55,19 +55,19 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 	// TODO: implement closure requested handling
 
 	dstID := *p.DstEntityID
-	slog.Info("Sending Put.request", "dst", dstID, "src", c.ID)
+	slog.Info("Sending Put.request", "from", c.ID, "to", dstID)
 	for _, msg := range p.MessagesToUser {
 		switch msg.GetMessageType() {
 		case messages.MessageTypeDirectoryRequest:
 			listingRequest := msg.(messages.DirectoryListingRequest)
-			slog.Info("Sending Directory Request", "dir", listingRequest.DirToList, "file", listingRequest.PathToRespond, "entityID", c.ID)
+			slog.Info("Sending Directory Request", "dir", listingRequest.DirToList, "file", listingRequest.PathToRespond, "from", c.ID, "dst", dstID)
 
 			// Create a FileDirective PDU to send metadata about the directory listing
 			pduHeader := messages.NewPDUHeader(false, c.ID, dstID, 12345)
-			fakeListing := []string{"file1.txt", "file2.txt", "file3.txt"}
+			fakeListing := "file1.txt file2.txt file3.txt"
 			pduContents := messages.MetadataPDUContents{
-				ClosureRequested:    false,
-				ChecksumType:        0, // Assuming no checksum for simplicity
+				ClosureRequested:    true,
+				ChecksumType:        0xff, // Mock checksum for simplicity
 				FileSize:            uint64(len(fakeListing)),
 				SourceFileName:      listingRequest.DirToList,
 				DestinationFileName: listingRequest.PathToRespond,
@@ -77,25 +77,8 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 				DirCode: messages.MetadataPDU,
 				Data:    pduContents.ToBytes(pduHeader),
 			}
-			if err := c.service.RequestBytes(pdu.ToBytes(uint16(len(pdu.Data))), c.ID); err != nil {
+			if err := c.service.RequestBytes(pdu.ToBytes(int16(len(pdu.Data))), dstID); err != nil {
 				fmt.Println("Error sending PDU:", err)
-			}
-
-			if err := c.service.Request(
-				RequestPrimitive{
-					ReqType:          PutRequest,
-					DstEntityID:      dstID,
-					SrcEntityID:      c.ID,
-					TransmissionMode: messages.Acknowledged,
-					MessagesToUser: []messages.Message{
-						messages.NewDirectoryListingResponse(listingRequest.DirToList, listingRequest.PathToRespond),
-						messages.NewOriginatingTransactionID(1, 12345),
-					},
-				},
-				c.ID,
-			); err != nil {
-				fmt.Println("Error handling directory request:", err)
-				return err
 			}
 		case messages.MessageTypeDirectoryResponse:
 			listingResponse := msg.(messages.DirectoryListingResponse)
