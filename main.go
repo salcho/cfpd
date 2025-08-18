@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/gob"
 	"fmt"
 	"log/slog"
 	"main/messages"
@@ -15,6 +13,15 @@ type RequestType uint
 const (
 	PutRequest RequestType = iota
 )
+
+func (r RequestType) String() string {
+	switch r {
+	case PutRequest:
+		return "PutRequest"
+	default:
+		return "UnknownRequest"
+	}
+}
 
 type RequestPrimitive struct {
 	ReqType                 RequestType
@@ -40,6 +47,10 @@ type RequestPrimitive struct {
 	SegmentData             []byte // optional
 	SegmentMetadataLength   uint64 // optional
 	RecordContinuationState string // optional
+}
+
+func (r RequestPrimitive) ToBytes() []byte {
+
 }
 
 func NewPutRequest(dst uint, msgs ...messages.Message) RequestPrimitive {
@@ -73,7 +84,21 @@ func NewService(sc ServiceConfig) *CFPDService {
 	return &CFPDService{config: sc}
 }
 
-func (s *CFPDService) Serve(p RequestPrimitive) {
+func (s *CFPDService) ProcessMessage(bytes []byte) error {
+	if len(bytes) == 0 {
+		return fmt.Errorf("no data received")
+	}
+
+	// TODO deserialize RequestPrimitive and handle it
+
+	decoded := messages.MetadataPDUContents{}
+	decoded.FromBytes(bytes, messages.ProtocolDataUnitHeader{LargeFileFlag: false})
+	fmt.Println(decoded)
+
+	return nil
+}
+
+func (s *CFPDService) Serve(p RequestPrimitive) error {
 	switch p.ReqType {
 	case PutRequest:
 		slog.Info("Serving Put.request", "dst", p.DstEntityID, "src", p.SrcEntityID)
@@ -83,24 +108,24 @@ func (s *CFPDService) Serve(p RequestPrimitive) {
 				listingRequest := msg.(messages.DirectoryListingRequest)
 				slog.Info("Handling Directory Request", "dir", listingRequest.DirToList, "file", listingRequest.PathToRespond, "entityID", s.config.entityID)
 
-				// fakeListing := []string{"file1.txt", "file2.txt", "file3.txt"}
+				fakeListing := []string{"file1.txt", "file2.txt", "file3.txt"}
 				// Create a FileDirective PDU to send metadata about the directory listing
-				// pduHeader := NewPDUHeader(false, s.config.entityID, p.SrcEntityID, 12345)
-				// pdu := FileDirectivePDU{
-				// 	header: pduHeader,
-				// 	dc:     MetadataPDU,
+				pduHeader := messages.NewPDUHeader(false, s.config.entityID, p.SrcEntityID, 12345)
+				// pdu := messages.FileDirectivePDU{
+				// 	Header: pduHeader,
+				// 	Dc:     messages.MetadataPDU,
 				// }
-				// pduContents := MetadataPDUContents{
-				// 	ClosureRequested:    false,
-				// 	ChecksumType:        0, // Assuming no checksum for simplicity
-				// 	FileSize:            uint64(len(fakeListing)),
-				// 	SourceFileName:      listingRequest.DirToList,
-				// 	DestinationFileName: listingRequest.PathToRespond,
-				// }
+				pduContents := messages.MetadataPDUContents{
+					ClosureRequested:    false,
+					ChecksumType:        0, // Assuming no checksum for simplicity
+					FileSize:            uint64(len(fakeListing)),
+					SourceFileName:      listingRequest.DirToList,
+					DestinationFileName: listingRequest.PathToRespond,
+				}
 
-				// if err := s.RequestPDU(pdu); err != nil {
-				// 	fmt.Println("Error sending PDU:", err)
-				// }
+				if err := s.RequestPDU(pduContents.ToBytes(pduHeader), p.SrcEntityID); err != nil {
+					fmt.Println("Error sending PDU:", err)
+				}
 
 				if err := s.Request(
 					RequestPrimitive{
@@ -116,19 +141,23 @@ func (s *CFPDService) Serve(p RequestPrimitive) {
 					p.SrcEntityID,
 				); err != nil {
 					fmt.Println("Error handling directory request:", err)
+					return err
 				}
 			case messages.MessageTypeDirectoryResponse:
 				listingResponse := msg.(messages.DirectoryListingResponse)
 				slog.Info("Handling Directory Response", "dir", listingResponse.DirToList, "file", listingResponse.PathToRespond, "entityID", s.config.entityID)
+				return nil
 			case messages.MessageTypeOriginatingTransactionID:
 				originatingTransactionID := msg.(messages.OriginatingTransactionID)
 				fmt.Println(s.config.entityID, "Handling Originating Transaction ID:", originatingTransactionID.SourceEntityID, originatingTransactionID.TransactionSequenceNumber)
+				return nil
 			default:
 				fmt.Println(s.config.entityID, "Unknown request primitive: ", msg.GetMessageType())
-				return
+				return fmt.Errorf("unknown request primitive: %s", msg.GetMessageType())
 			}
 		}
 	}
+	return nil
 }
 
 func (s *CFPDService) Request(p RequestPrimitive, entityID uint) error {
@@ -142,7 +171,7 @@ func (s *CFPDService) Request(p RequestPrimitive, entityID uint) error {
 		return fmt.Errorf("failed to resolve address %s: %w", addr, err)
 	}
 
-	slog.Info("Sending request", "entityID", entityID, "resolved", resolved)
+	slog.Info("Sending request", "type", p.ReqType, "entityID", entityID, "resolved", resolved)
 	conn, err := net.DialUDP("udp", nil, resolved)
 	if err != nil {
 		return fmt.Errorf("failed to dial UDP: %w", err)
@@ -150,17 +179,17 @@ func (s *CFPDService) Request(p RequestPrimitive, entityID uint) error {
 
 	defer conn.Close()
 
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	gob.Register(messages.DirectoryListingRequest{})
-	gob.Register(messages.MessageHeaderImpl{})
-	gob.Register(messages.DirectoryListingResponse{})
-	gob.Register(messages.OriginatingTransactionID{})
-	if err := enc.Encode(p); err != nil {
-		return fmt.Errorf("failed to encode request primitive: %w", err)
-	}
+	// var buf bytes.Buffer
+	// enc := gob.NewEncoder(&buf)
+	// gob.Register(messages.DirectoryListingRequest{})
+	// gob.Register(messages.MessageHeaderImpl{})
+	// gob.Register(messages.DirectoryListingResponse{})
+	// gob.Register(messages.OriginatingTransactionID{})
+	// if err := enc.Encode(p); err != nil {
+	// return fmt.Errorf("failed to encode request primitive: %w", err)
+	// }
 
-	if _, err := conn.Write(buf.Bytes()); err != nil {
+	if _, err := conn.Write(p.ToBytes()); err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 
@@ -194,7 +223,7 @@ func (s *CFPDService) RequestPDU(p []byte, dEntityID uint) error {
 	return nil
 }
 
-func (s *CFPDService) Bind() error {
+func (s *CFPDService) BindAndListen() error {
 	udpAddr, err := net.ResolveUDPAddr("udp", s.config.address)
 	if err != nil {
 		return fmt.Errorf("failed to resolve address: %w", err)
@@ -217,12 +246,7 @@ func (s *CFPDService) Bind() error {
 			s.isListening = false
 			break
 		}
-		dec := gob.NewDecoder(bytes.NewBuffer(buf))
-		p := RequestPrimitive{}
-		if err := dec.Decode(&p); err != nil {
-			return fmt.Errorf("failed to decode request primitive: %w", err)
-		}
-		s.Serve(p)
+		s.ProcessMessage(buf)
 	}
 
 	s.isListening = false
@@ -238,7 +262,7 @@ func main() {
 		},
 	}
 	s := NewService(srvConf)
-	go s.Bind()
+	go s.BindAndListen()
 
 	clientConf := ServiceConfig{
 		entityID: 0,
@@ -247,31 +271,21 @@ func main() {
 			1: "127.0.0.1:11234",
 		},
 	}
-	c := NewService(clientConf)
-	go c.Bind()
+	client := NewEntity(0, "Client", NewService(clientConf))
+	client.ListDirectory(1, "/path/to/local/dir", "/path/to/remote/dir")
 
-	for {
-		if s.isListening && c.isListening {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	// listingRequest := RequestPrimitive{
+	// 	ReqType:          PutRequest,
+	// 	DstEntityID:      1,
+	// 	SrcEntityID:      0,
+	// 	TransmissionMode: messages.Unacknowledged,
+	// 	MessagesToUser: []messages.Message{
+	// 		messages.NewDirectoryListingRequest("/path/to/directory", "/path/to/directory/listing.txt"),
+	// 	},
+	// }
 
-	listingRequest := RequestPrimitive{
-		ReqType:          PutRequest,
-		DstEntityID:      1,
-		SrcEntityID:      0,
-		TransmissionMode: messages.Unacknowledged,
-		MessagesToUser: []messages.Message{
-			messages.NewDirectoryListingRequest("/path/to/directory", "/path/to/directory/listing.txt"),
-		},
-	}
+	// err := c.Request(listingRequest, 1)
 
-	err := c.Request(listingRequest, 1)
-	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return
-	}
 	// fmt.Println("CFDP ID:", s.GetID())
 	// fmt.Println("CFDP Name:", s.GetName())
 	// cfdp.ProxyOperation()
@@ -280,6 +294,6 @@ func main() {
 	// cfdp.ResumeOperation()
 	for {
 		// Prevent busy loop
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10000 * time.Millisecond)
 	}
 }

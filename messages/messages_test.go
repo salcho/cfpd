@@ -7,7 +7,7 @@ import (
 func TestMetadataPDUContents_ToBytesAndFromBytes(t *testing.T) {
 	// Setup a sample header and contents
 	header := ProtocolDataUnitHeader{
-		largeFileFlag: true,
+		LargeFileFlag: true,
 	}
 	original := MetadataPDUContents{
 		ClosureRequested:    true,
@@ -22,7 +22,7 @@ func TestMetadataPDUContents_ToBytesAndFromBytes(t *testing.T) {
 
 	// Decode from bytes
 	var decoded MetadataPDUContents
-	decoded = decoded.FromBytes(data, header)
+	decoded.FromBytes(data, header)
 
 	// Check fields
 	if decoded.ClosureRequested != original.ClosureRequested {
@@ -44,7 +44,7 @@ func TestMetadataPDUContents_ToBytesAndFromBytes(t *testing.T) {
 
 func TestMetadataPDUContents_SmallFileFlag(t *testing.T) {
 	header := ProtocolDataUnitHeader{
-		largeFileFlag: false,
+		LargeFileFlag: false,
 	}
 	original := MetadataPDUContents{
 		ClosureRequested:    false,
@@ -56,7 +56,7 @@ func TestMetadataPDUContents_SmallFileFlag(t *testing.T) {
 
 	data := original.ToBytes(header)
 	var decoded MetadataPDUContents
-	decoded = decoded.FromBytes(data, header)
+	decoded.FromBytes(data, header)
 
 	if decoded.FileSize != original.FileSize {
 		t.Errorf("FileSize mismatch for small file: got %v, want %v", decoded.FileSize, original.FileSize)

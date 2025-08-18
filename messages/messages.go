@@ -1,6 +1,8 @@
 package messages
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 )
 
@@ -25,11 +27,15 @@ type MessageImpl struct {
 	MessageType MessageType
 }
 
-func (m MessageImpl) ToBytes() ([]byte, error) {
-	bytes := []byte{}
-	// bytes = append(bytes, 0x1)
-	return bytes, nil
-}
+// func (m MessageImpl) ToBytes() ([]byte, error) {
+// 	bytes := []byte{}
+// 	// Header
+// 	bytes = append(bytes, "cfpd"...)
+// 	bytes = append(bytes, byte(m.MessageType))
+
+// 	// bytes = append(bytes, 0x1)
+// 	return bytes, nil
+// }
 
 func (m MessageImpl) GetHeader() MessageHeader {
 	return m.Header
@@ -43,16 +49,16 @@ func (m MessageImpl) String() string {
 	return fmt.Sprintf("Message{header: %s, messageType: %s}", m.Header.GetMagic(), m.MessageType)
 }
 
-type MessageType uint8
+type MessageType byte
 
 const (
-	MessageTypeProxyOperation           = 0x1
-	MessageTypeStatusReportOperation    = 0x2
-	MessageTypeSuspendOperation         = 0x3
-	MessageTypeResumeOperation          = 0x4
-	MessageTypeDirectoryRequest         = 0x10
-	MessageTypeDirectoryResponse        = 0x11
-	MessageTypeOriginatingTransactionID = 0x0A
+	MessageTypeProxyOperation           MessageType = 0x1
+	MessageTypeStatusReportOperation    MessageType = 0x2
+	MessageTypeSuspendOperation         MessageType = 0x3
+	MessageTypeResumeOperation          MessageType = 0x4
+	MessageTypeDirectoryRequest         MessageType = 0x10
+	MessageTypeDirectoryResponse        MessageType = 0x11
+	MessageTypeOriginatingTransactionID MessageType = 0x0A
 )
 
 func (mt MessageType) String() string {
@@ -169,7 +175,7 @@ type ProtocolDataUnitHeader struct {
 	direction                      bool  // PDU forwarding: false toward file receiver, true toward file sender
 	transmissionMode               TransmissionMode
 	crcFlag                        bool   // true if CRC is present
-	largeFileFlag                  bool   // files whose size can’t be represented in an unsigned 32-bit integer shall be flagged large
+	LargeFileFlag                  bool   // files whose size can’t be represented in an unsigned 32-bit integer shall be flagged large
 	pduDataFieldLength             uint16 // in octets
 	segmentationControl            bool   // whether record boundaries are preserved in file data segmentation, always false for file directives
 	lengthEntityID                 uint8  // number of octets in the entity ID minus one; 0 means 1 octet
@@ -187,7 +193,7 @@ func NewPDUHeader(largeFileFlag bool, srcEntityID uint, dstEntityID uint, transa
 		direction:                      false,
 		transmissionMode:               Unacknowledged,
 		crcFlag:                        false,
-		largeFileFlag:                  largeFileFlag,
+		LargeFileFlag:                  largeFileFlag,
 		pduDataFieldLength:             0, // TODO: set to actual length when data is added
 		segmentationControl:            false,
 		lengthEntityID:                 4, // 4 octets for uint32
@@ -205,12 +211,12 @@ func NewPDUHeader(largeFileFlag bool, srcEntityID uint, dstEntityID uint, transa
 // }
 
 type FileDirectivePDU struct {
-	header ProtocolDataUnitHeader
-	dc     DirectiveCode
+	Header ProtocolDataUnitHeader
+	Dc     DirectiveCode
 }
 
 func (pdu FileDirectivePDU) GetHeader() ProtocolDataUnitHeader {
-	return pdu.header
+	return pdu.Header
 }
 
 // ============= File Data PDUs
@@ -287,75 +293,88 @@ type MetadataPDUContents struct {
 
 func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) []byte {
 	// reserved bits left as 0
-	bytes := make([]byte, 1024)
-	bytes[0] |= 0b0 << 3    // reserved
+	// bytes := make([]byte, 1024)
+	bytes := new(bytes.Buffer)
+
+	// first byte: reserved bits, ClosureRequested
+	var flags byte
 	if m.ClosureRequested { // TODO: if transaction is in Acknowledged mode, set to ‘0’ and ignored
-		bytes[0] |= 0b1 << 2
+		flags |= 0b00000100
 	}
-	bytes[0] |= 0b00 // reserved
-	bytes[1] |= m.ChecksumType
-	bytes[2] |= uint8(m.FileSize & 0xFF)         // first 8 bits of file size
-	bytes[3] |= uint8((m.FileSize >> 8) & 0xFF)  // next 8 bits of file size
-	bytes[4] |= uint8((m.FileSize >> 16) & 0xFF) // next 8 bits of file size
-	bytes[5] |= uint8((m.FileSize >> 24) & 0xFF) // next 8 bits of file size
-	offset := 6
+	bytes.WriteByte(flags)
+	// second byte: ChecksumType
+	bytes.WriteByte(m.ChecksumType)
 
-	// If largeFileFlag is set, the file size is represented in 64 bits
-	if h.largeFileFlag {
-		bytes[6] |= uint8((m.FileSize >> 32) & 0xFF)
-		bytes[7] |= uint8((m.FileSize >> 40) & 0xFF)
-		bytes[8] |= uint8((m.FileSize >> 48) & 0xFF)
-		bytes[9] |= uint8((m.FileSize >> 56) & 0xFF)
-		offset = 10
+	// FileSize
+	if h.LargeFileFlag {
+		binary.Write(bytes, binary.LittleEndian, m.FileSize)
+	} else {
+		binary.Write(bytes, binary.LittleEndian, uint32(m.FileSize))
 	}
 
-	// write a single byte for the length of the source file name
-	bytes[offset] = uint8(len(m.SourceFileName))
-	offset++
-	// write the source file name
-	for i := 0; i < len(m.SourceFileName); i++ {
-		if offset >= len(bytes) {
-			break // prevent overflow
-		}
-		bytes[offset] = m.SourceFileName[i]
-		offset++
-	}
+	// SourceFileName
+	bytes.WriteByte(byte(len(m.SourceFileName)))
+	bytes.WriteString(m.SourceFileName)
 
-	bytes[offset] = uint8(len(m.DestinationFileName))
-	offset++
-	// write the source file name
-	for i := 0; i < len(m.DestinationFileName); i++ {
-		if offset >= len(bytes) {
-			break // prevent overflow
-		}
-		bytes[offset] = m.DestinationFileName[i]
-		offset++
-	}
+	// DestinationFileName
+	bytes.WriteByte(byte(len(m.DestinationFileName)))
+	bytes.WriteString(m.DestinationFileName)
 
 	// TODO: Add Options field, see section 5.2.5 METADATA PDU of the spec
-	return bytes[:offset]
+	return bytes.Bytes()
 }
 
-func (m MetadataPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) MetadataPDUContents {
-	offset := 0
-	// reserved bits left as 0
-	m.ClosureRequested = (data[0] & 0b00000100) != 0
-	m.ChecksumType = data[1]
-	m.FileSize = uint64(data[2]) | uint64(data[3])<<8 | uint64(data[4])<<16 | uint64(data[5])<<24
-	if h.largeFileFlag {
-		m.FileSize |= uint64(data[6])<<32 | uint64(data[7])<<40 | uint64(data[8])<<48 | uint64(data[9])<<56
-		offset = 10
-	} else {
-		offset = 6
+func (m *MetadataPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) error {
+	buf := bytes.NewReader(data)
+
+	// Flags
+	var flags byte
+	if err := binary.Read(buf, binary.LittleEndian, &flags); err != nil {
+		return err
 	}
-	sourceFileNameLength := data[offset]
-	offset++
-	m.SourceFileName = string(data[offset : offset+int(sourceFileNameLength)])
-	offset += int(sourceFileNameLength)
+	m.ClosureRequested = (flags & 0b00000100) != 0
 
-	destinationFileNameLength := data[offset]
-	offset++
-	m.DestinationFileName = string(data[offset : offset+int(destinationFileNameLength)])
+	// ChecksumType
+	if err := binary.Read(buf, binary.LittleEndian, &m.ChecksumType); err != nil {
+		return err
+	}
 
-	return m
+	// FileSize
+	if h.LargeFileFlag {
+		if err := binary.Read(buf, binary.LittleEndian, &m.FileSize); err != nil {
+			return err
+		}
+	} else {
+		var fs32 uint32
+		if err := binary.Read(buf, binary.LittleEndian, &fs32); err != nil {
+			return err
+		}
+		m.FileSize = uint64(fs32)
+	}
+
+	// SourceFileName
+	var srcLen byte
+	if err := binary.Read(buf, binary.LittleEndian, &srcLen); err != nil {
+		return err
+	}
+	src := make([]byte, srcLen)
+	if _, err := buf.Read(src); err != nil {
+		return err
+	}
+	m.SourceFileName = string(src)
+
+	// DestinationFileName
+	var dstLen byte
+	if err := binary.Read(buf, binary.LittleEndian, &dstLen); err != nil {
+		return err
+	}
+	dst := make([]byte, dstLen)
+	if _, err := buf.Read(dst); err != nil {
+		return err
+	}
+	m.DestinationFileName = string(dst)
+
+	// TODO: Parse Options field if present
+
+	return nil
 }
