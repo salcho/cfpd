@@ -176,17 +176,119 @@ type ProtocolDataUnitHeader struct {
 	transmissionMode               TransmissionMode
 	crcFlag                        bool   // true if CRC is present
 	LargeFileFlag                  bool   // files whose size can’t be represented in an unsigned 32-bit integer shall be flagged large
-	pduDataFieldLength             uint16 // in octets
+	pduDataFieldLength             int16  // in octets
 	segmentationControl            bool   // whether record boundaries are preserved in file data segmentation, always false for file directives
-	lengthEntityID                 uint8  // number of octets in the entity ID minus one; 0 means 1 octet
+	lengthEntityID                 byte   // number of octets in the entity ID minus one; 0 means 1 octet
 	segmentMetadataFlag            bool   // whether the PDU contains segment metadata, always false for file directives
 	lenghTransactionSequenceNumber uint8  // number of octets in the transaction sequence number minus one; 0 means 1 octet
-	sourceEntityID                 uint   // identifies the entity that originated the transaction.
-	transactionSequenceNumber      uint   // uniquely identifies the transaction within the source entity
-	destinationEntityID            uint   // identifies the final destination of the transaction’s metadata and file data
+	sourceEntityID                 uint16 // identifies the entity that originated the transaction.
+	transactionSequenceNumber      uint16 // uniquely identifies the transaction within the source entity
+	destinationEntityID            uint16 // identifies the final destination of the transaction’s metadata and file data
 }
 
-func NewPDUHeader(largeFileFlag bool, srcEntityID uint, dstEntityID uint, transactionID uint) ProtocolDataUnitHeader {
+func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
+	if dataFieldLength < 0 {
+		return nil, fmt.Errorf("data field length must be non-negative")
+	}
+	bytes := new(bytes.Buffer)
+
+	// version, pduType, direction, transmissionMode, crcFlag, LargeFileFlag
+	var flags byte
+	flags |= h.version << 5 // 3 bits for version
+
+	if h.pduType {
+		flags |= 0b00010000 // 1 bit for pduType
+	}
+
+	if h.direction {
+		flags |= 0b00001000 // 1 bit for direction
+	}
+	if h.transmissionMode == Unacknowledged {
+		flags |= 0b00000100 // 1 bit for transmissionMode (0 for unacknowledged)
+	}
+	if h.crcFlag {
+		flags |= 0b00000010 // 1 bit for crcFlag
+	}
+	if h.LargeFileFlag {
+		flags |= 0b00000001 // 1 bit for LargeFileFlag
+	}
+
+	bytes.WriteByte(flags)
+
+	if err := binary.Write(bytes, binary.LittleEndian, dataFieldLength); err != nil {
+		return []byte{}, fmt.Errorf("failed to write pduDataFieldLength: %v", err)
+	}
+
+	// segmentationControl, lengthEntityID, segmentMetadataFlag, lenghTransactionSequenceNumber
+	flags = 0
+	if h.pduType && h.segmentationControl {
+		flags |= 0b10000000 // 1 bit for segmentationControl
+	}
+	flags |= (h.lengthEntityID - 1) << 4 // 3 bits for lengthEntityID
+	if h.segmentMetadataFlag {
+		flags |= 0b00001000 // 1 bit for segmentMetadataFlag
+	}
+	flags |= (h.lenghTransactionSequenceNumber - 1) & 0b00000111 // 3 bits for lenghTransactionSequenceNumber
+
+	bytes.WriteByte(flags)
+
+	// sourceEntityID, transactionSequenceNumber, destinationEntityID
+	if err := binary.Write(bytes, binary.LittleEndian, h.sourceEntityID); err != nil {
+		return []byte{}, fmt.Errorf("failed to write sourceEntityID: %v", err)
+	}
+	if err := binary.Write(bytes, binary.LittleEndian, h.transactionSequenceNumber); err != nil {
+		return []byte{}, fmt.Errorf("failed to write transactionSequenceNumber: %v", err)
+	}
+	if err := binary.Write(bytes, binary.LittleEndian, h.destinationEntityID); err != nil {
+		return []byte{}, fmt.Errorf("failed to write destinationEntityID: %v", err)
+	}
+
+	return bytes.Bytes(), nil
+}
+
+func (h *ProtocolDataUnitHeader) FromBytes(data []byte) error {
+	buf := bytes.NewReader(data)
+
+	// version, pduType, direction, transmissionMode, crcFlag, LargeFileFlag
+	var flags byte
+	if err := binary.Read(buf, binary.LittleEndian, &flags); err != nil {
+		return fmt.Errorf("failed to read flags: %v", err)
+	}
+	h.version = flags >> 5
+	h.pduType = (flags & 0b00010000) != 0
+	h.direction = (flags & 0b00001000) != 0
+	h.transmissionMode = TransmissionMode((flags & 0b00000100) >> 2)
+	h.crcFlag = (flags & 0b00000010) != 0
+	h.LargeFileFlag = (flags & 0b00000001) != 0
+
+	if err := binary.Read(buf, binary.LittleEndian, &h.pduDataFieldLength); err != nil {
+		return fmt.Errorf("failed to read pduDataFieldLength: %v", err)
+	}
+
+	// segmentationControl, lengthEntityID, segmentMetadataFlag, lenghTransactionSequenceNumber
+	flags = 0
+	if err := binary.Read(buf, binary.LittleEndian, &flags); err != nil {
+		return fmt.Errorf("failed to read flags: %v", err)
+	}
+	h.segmentationControl = (flags & 0b10000000) != 0
+	h.lengthEntityID = ((flags & 0b01110000) >> 4) + 1 // +1 because it's minus one in the spec
+	h.segmentMetadataFlag = (flags & 0b00001000) != 0
+	h.lenghTransactionSequenceNumber = flags&0b00000111 + 1 // +1 because it's minus one in the spec
+
+	if err := binary.Read(buf, binary.LittleEndian, &h.sourceEntityID); err != nil {
+		return fmt.Errorf("failed to read sourceEntityID: %v", err)
+	}
+	if err := binary.Read(buf, binary.LittleEndian, &h.transactionSequenceNumber); err != nil {
+		return fmt.Errorf("failed to read transactionSequenceNumber: %v", err)
+	}
+	if err := binary.Read(buf, binary.LittleEndian, &h.destinationEntityID); err != nil {
+		return fmt.Errorf("failed to read destinationEntityID: %v", err)
+	}
+
+	return nil
+}
+
+func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, transactionID uint16) ProtocolDataUnitHeader {
 	return ProtocolDataUnitHeader{
 		version:                        1,
 		pduType:                        false,
@@ -211,8 +313,17 @@ func NewPDUHeader(largeFileFlag bool, srcEntityID uint, dstEntityID uint, transa
 // }
 
 type FileDirectivePDU struct {
-	Header ProtocolDataUnitHeader
-	Dc     DirectiveCode
+	Header  ProtocolDataUnitHeader
+	DirCode DirectiveCode
+	Data    []byte
+}
+
+func (pdu FileDirectivePDU) ToBytes(dataFieldLength uint16) []byte {
+	bytes := new(bytes.Buffer)
+
+	// bytes.Write(pdu.Header.ToBytes(dataFieldLength))
+	return bytes.Bytes()
+
 }
 
 func (pdu FileDirectivePDU) GetHeader() ProtocolDataUnitHeader {
@@ -251,6 +362,19 @@ const (
 	UnsupportedChecksum     ConditionCode = 0b1011
 	SuspendRequestReceived  ConditionCode = 0b1100
 	CancelRequestReceived   ConditionCode = 0b1111
+)
+
+func (c ConditionCode) IsError() bool {
+	return c != NoError && c != SuspendRequestReceived && c != CancelRequestReceived
+}
+
+type Action uint8
+
+const (
+	Cancel Action = iota
+	Suspend
+	Ignore
+	Abandon
 )
 
 type EOFPDUData struct {
@@ -293,7 +417,6 @@ type MetadataPDUContents struct {
 
 func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) []byte {
 	// reserved bits left as 0
-	// bytes := make([]byte, 1024)
 	bytes := new(bytes.Buffer)
 
 	// first byte: reserved bits, ClosureRequested
