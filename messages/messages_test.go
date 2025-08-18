@@ -72,13 +72,13 @@ func TestMetadataPDUContents_SmallFileFlag(t *testing.T) {
 func TestProtocolDataUnitHeader_ToBytesAndFromBytes(t *testing.T) {
 	original := ProtocolDataUnitHeader{
 		version:                        1,
-		pduType:                        true,
+		PduType:                        FileDirective,
 		direction:                      true,
 		transmissionMode:               Acknowledged,
 		crcFlag:                        true,
 		LargeFileFlag:                  true,
 		pduDataFieldLength:             1234,
-		segmentationControl:            true,
+		segmentationControl:            false,
 		lengthEntityID:                 4,
 		segmentMetadataFlag:            true,
 		lenghTransactionSequenceNumber: 4,
@@ -107,8 +107,8 @@ func TestProtocolDataUnitHeader_ToBytesAndFromBytes(t *testing.T) {
 	if decoded.version != original.version {
 		t.Errorf("version mismatch: got %v, want %v", decoded.version, original.version)
 	}
-	if decoded.pduType != original.pduType {
-		t.Errorf("pduType mismatch: got %v, want %v", decoded.pduType, original.pduType)
+	if decoded.PduType != original.PduType {
+		t.Errorf("pduType mismatch: got %v, want %v", decoded.PduType, original.PduType)
 	}
 	if decoded.direction != original.direction {
 		t.Errorf("direction mismatch: got %v, want %v", decoded.direction, original.direction)
@@ -224,7 +224,7 @@ func TestFileDirectivePDU_ToBytesAndFromBytes(t *testing.T) {
 	// 1. Setup
 	originalHeader := ProtocolDataUnitHeader{
 		version:                        1,
-		pduType:                        false, // File Directive
+		PduType:                        FileDirective,
 		direction:                      false,
 		transmissionMode:               Unacknowledged,
 		crcFlag:                        false,
@@ -284,6 +284,66 @@ func TestFileDirectivePDU_ToBytesAndFromBytes(t *testing.T) {
 	for i := range originalPDU.Data {
 		if decodedPDU.Data[i] != originalPDU.Data[i] {
 			t.Errorf("Data mismatch at index %d: got %x, want %x", i, decodedPDU.Data[i], originalPDU.Data[i])
+		}
+	}
+}
+
+func TestMetadataPDUContents_WithOptions(t *testing.T) {
+	// 1. Setup
+	header := ProtocolDataUnitHeader{
+		LargeFileFlag: true,
+	}
+	original := MetadataPDUContents{
+		ClosureRequested:    true,
+		ChecksumType:        0x1,
+		FileSize:            1024,
+		SourceFileName:      "src.dat",
+		DestinationFileName: "dest.dat",
+		Options: []TLVFormat{
+			{
+				Type:   FlowLabel,
+				Length: 4,
+				Value:  []byte{0xDE, 0xAD, 0xBE, 0xEF},
+			}, {
+				Type:   MessagesToUser,
+				Length: 8,
+				Value:  []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF},
+			},
+		},
+	}
+
+	// 2. Serialize
+	data := original.ToBytes(header)
+
+	// 3. Deserialize
+	var decoded MetadataPDUContents
+	if err := decoded.FromBytes(data, header); err != nil {
+		t.Fatalf("FromBytes failed: %v", err)
+	}
+
+	// 4. Compare basic fields
+	if decoded.SourceFileName != original.SourceFileName {
+		t.Errorf("SourceFileName mismatch: got %v, want %v", decoded.SourceFileName, original.SourceFileName)
+	}
+	if decoded.FileSize != original.FileSize {
+		t.Errorf("FileSize mismatch: got %v, want %v", decoded.FileSize, original.FileSize)
+	}
+
+	// 5. Compare Options
+	if len(decoded.Options) != len(original.Options) {
+		t.Fatalf("Options length mismatch: got %d, want %d", len(decoded.Options), len(original.Options))
+	}
+
+	for i, originalOpt := range original.Options {
+		decodedOpt := decoded.Options[i]
+		if decodedOpt.Type != originalOpt.Type {
+			t.Errorf("Option %d Type mismatch: got %v, want %v", i, decodedOpt.Type, originalOpt.Type)
+		}
+		if decodedOpt.Length != originalOpt.Length {
+			t.Errorf("Option %d Length mismatch: got %d, want %d", i, decodedOpt.Length, originalOpt.Length)
+		}
+		if string(decodedOpt.Value) != string(originalOpt.Value) {
+			t.Errorf("Option %d Value mismatch: got %x, want %x", i, decodedOpt.Value, originalOpt.Value)
 		}
 	}
 }

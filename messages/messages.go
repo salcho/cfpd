@@ -169,10 +169,17 @@ type ProtocolDataUnit interface {
 	GetHeader() ProtocolDataUnitHeader
 }
 
+type PduType byte
+
+const (
+	FileDirective PduType = 0x0
+	FileData      PduType = 0x1
+)
+
 type ProtocolDataUnitHeader struct {
 	version                        uint8 // "001"
-	pduType                        bool  // false for file directive, true for file data
-	direction                      bool  // PDU forwarding: false toward file receiver, true toward file sender
+	PduType                        PduType
+	direction                      bool // PDU forwarding: false toward file receiver, true toward file sender
 	transmissionMode               TransmissionMode
 	crcFlag                        bool   // true if CRC is present
 	LargeFileFlag                  bool   // files whose size can’t be represented in an unsigned 32-bit integer shall be flagged large
@@ -196,7 +203,7 @@ func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
 	var flags byte
 	flags |= h.version << 5 // 3 bits for version
 
-	if h.pduType {
+	if h.PduType == FileData {
 		flags |= 0b00010000 // 1 bit for pduType
 	}
 
@@ -221,7 +228,7 @@ func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
 
 	// segmentationControl, lengthEntityID, segmentMetadataFlag, lenghTransactionSequenceNumber
 	flags = 0
-	if h.pduType && h.segmentationControl {
+	if h.PduType == FileData && h.segmentationControl {
 		flags |= 0b10000000 // 1 bit for segmentationControl
 	}
 	flags |= (h.lengthEntityID - 1) << 4 // 3 bits for lengthEntityID
@@ -255,7 +262,11 @@ func (h *ProtocolDataUnitHeader) FromBytes(data []byte) (int, error) {
 		return 0, fmt.Errorf("failed to read flags: %v", err)
 	}
 	h.version = flags >> 5
-	h.pduType = (flags & 0b00010000) != 0
+	if (flags & 0b00010000) != 0 {
+		h.PduType = FileData
+	} else {
+		h.PduType = FileDirective
+	}
 	h.direction = (flags & 0b00001000) != 0
 	h.transmissionMode = TransmissionMode((flags & 0b00000100) >> 2)
 	h.crcFlag = (flags & 0b00000010) != 0
@@ -290,10 +301,10 @@ func (h *ProtocolDataUnitHeader) FromBytes(data []byte) (int, error) {
 	return bytesRead, nil
 }
 
-func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, transactionID uint16) ProtocolDataUnitHeader {
+func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, transactionID uint16, pduType PduType) ProtocolDataUnitHeader {
 	return ProtocolDataUnitHeader{
 		version:                        1,
-		pduType:                        false,
+		PduType:                        pduType,
 		direction:                      false,
 		transmissionMode:               Unacknowledged,
 		crcFlag:                        false,
@@ -452,6 +463,7 @@ type MetadataPDUContents struct {
 	FileSize            uint64 // If Large File flag is zero, the size of FSS data is 32 bits, else it is 64 bits.
 	SourceFileName      string
 	DestinationFileName string
+	Options             []TLVFormat
 }
 
 func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) []byte {
@@ -482,7 +494,9 @@ func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) []byte {
 	bytes.WriteByte(byte(len(m.DestinationFileName)))
 	bytes.WriteString(m.DestinationFileName)
 
-	// TODO: Add Options field, see section 5.2.5 METADATA PDU of the spec
+	for _, option := range m.Options {
+		bytes.Write(option.ToBytes())
+	}
 	return bytes.Bytes()
 }
 
@@ -536,7 +550,87 @@ func (m *MetadataPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) e
 	}
 	m.DestinationFileName = string(dst)
 
-	// TODO: Parse Options field if present
+	// Options
+	for buf.Len() > 0 {
+		tlv := TLVFormat{}
+		err := tlv.FromBytes(buf)
+		if err != nil {
+			return err
+		}
+		m.Options = append(m.Options, tlv)
+	}
+
+	return nil
+}
+
+type TLVType byte
+
+const (
+	FilestoreRequest     TLVType = 0x0
+	FilestoreResponse    TLVType = 0x1
+	MessagesToUser       TLVType = 0x2
+	FaultHandlerOverride TLVType = 0x4
+	FlowLabel            TLVType = 0x5
+	EntityID             TLVType = 0x6
+)
+
+func TLVTypeFromString(b byte) (TLVType, error) {
+	switch b {
+	case 0x0:
+		return FilestoreRequest, nil
+	case 0x1:
+		return FilestoreResponse, nil
+	case 0x2:
+		return MessagesToUser, nil
+	case 0x4:
+		return FaultHandlerOverride, nil
+	case 0x5:
+		return FlowLabel, nil
+	case 0x6:
+		return EntityID, nil
+	default:
+		return 0, fmt.Errorf("unknown TLV type: %d", b)
+	}
+}
+
+type TLVFormat struct {
+	Type   TLVType
+	Length byte
+	Value  []byte
+}
+
+func (t TLVFormat) ToBytes() []byte {
+	bytes := new(bytes.Buffer)
+	bytes.WriteByte(byte(t.Type))
+	bytes.WriteByte(t.Length)
+	bytes.Write(t.Value)
+	return bytes.Bytes()
+}
+
+func (t *TLVFormat) FromBytes(data *bytes.Reader) error {
+	b, err := data.ReadByte()
+	if err != nil {
+		return fmt.Errorf("failed to read TLV type: %v", err)
+	}
+	t.Type, err = TLVTypeFromString(b)
+	if err != nil {
+		return fmt.Errorf("failed to parse TLV type: %v", err)
+	}
+
+	b, err = data.ReadByte()
+	if err != nil {
+		return fmt.Errorf("failed to read TLV length: %v", err)
+	}
+	t.Length = b
+
+	if data.Len() < int(t.Length) {
+		return fmt.Errorf("data too short for TLV value")
+	}
+	// Read the value
+	t.Value = make([]byte, t.Length)
+	if _, err := data.Read(t.Value); err != nil {
+		return fmt.Errorf("failed to read TLV value: %v", err)
+	}
 
 	return nil
 }

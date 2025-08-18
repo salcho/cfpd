@@ -35,13 +35,27 @@ func (s *CFPDService) ProcessMessage(bytes []byte) error {
 		return fmt.Errorf("no data received")
 	}
 
-	decoded := messages.FileDirectivePDU{}
-	decoded.FromBytes(bytes)
-	fmt.Printf("decoded: %#v\n", decoded)
+	header := messages.ProtocolDataUnitHeader{}
+	_, err := header.FromBytes(bytes)
+	if err != nil {
+		return fmt.Errorf("failed to decode header: %v", err)
+	}
 
-	metadata := messages.MetadataPDUContents{}
-	metadata.FromBytes(decoded.Data, decoded.Header)
-	fmt.Printf("metadata: %#v\n", metadata)
+	if header.PduType == messages.FileDirective {
+		fmt.Println("Received File Directive PDU")
+		decoded := messages.FileDirectivePDU{}
+		err := decoded.FromBytes(bytes)
+		if err != nil {
+			return fmt.Errorf("failed to decode File Directive PDU: %v", err)
+		}
+
+		metadata := messages.MetadataPDUContents{}
+		err = metadata.FromBytes(decoded.Data, decoded.Header)
+		if err != nil {
+			return fmt.Errorf("failed to decode metadata: %v", err)
+		}
+	}
+
 	return nil
 }
 

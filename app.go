@@ -38,22 +38,5 @@ func (app *cfpdApp) ListDirectory(dstEntityID uint16, localPath, remotePath stri
 		FilestoreRequests: []string{},
 	})
 
-	// fakeListing := "file1.txt file2.txt file3.txt"
-	// // Create a FileDirective PDU to send metadata about the directory listing
-	// pduHeader := messages.NewPDUHeader(false, c.Service.config.entityID, 0, 12345)
-	// pduContents := messages.MetadataPDUContents{
-	// 	ClosureRequested:    true,
-	// 	ChecksumType:        0x9, // Assuming no checksum for simplicity
-	// 	FileSize:            uint64(len(fakeListing)),
-	// 	SourceFileName:      "/dir/to/list",
-	// 	DestinationFileName: "/path/to/respond",
-	// }
-
-	// err := c.Service.RequestPDU(pduContents.ToBytes(pduHeader), dstEntityID)
-	// if err != nil {
-	// 	fmt.Println("Error sending request:", err)
-	// 	return err
-	// }
-
 	return nil
 }

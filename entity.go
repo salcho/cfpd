@@ -63,12 +63,12 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 			slog.Info("Sending Directory Request", "dir", listingRequest.DirToList, "file", listingRequest.PathToRespond, "from", c.ID, "dst", dstID)
 
 			// Create a FileDirective PDU to send metadata about the directory listing
-			pduHeader := messages.NewPDUHeader(false, c.ID, dstID, 12345)
-			fakeListing := "file1.txt file2.txt file3.txt"
+			// TODO: assign sequence number and transaction ID properly
+			pduHeader := messages.NewPDUHeader(false, c.ID, dstID, 12345, messages.FileDirective)
 			pduContents := messages.MetadataPDUContents{
-				ClosureRequested:    true,
+				ClosureRequested:    p.ClosureRequested,
 				ChecksumType:        0xff, // Mock checksum for simplicity
-				FileSize:            uint64(len(fakeListing)),
+				FileSize:            0,
 				SourceFileName:      listingRequest.DirToList,
 				DestinationFileName: listingRequest.PathToRespond,
 			}
