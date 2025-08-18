@@ -95,8 +95,12 @@ func TestProtocolDataUnitHeader_ToBytesAndFromBytes(t *testing.T) {
 
 	// Deserialize
 	var decoded ProtocolDataUnitHeader
-	if err := decoded.FromBytes(b); err != nil {
+	hLen, err := decoded.FromBytes(b)
+	if err != nil {
 		t.Fatalf("FromBytes failed: %v", err)
+	}
+	if hLen != len(b) {
+		t.Fatalf("FromBytes returned length %d, expected %d", hLen, len(b))
 	}
 
 	// Compare fields
@@ -213,5 +217,73 @@ func TestMetadataPDUContents_ToBytesAndFromBytes_SmallFile(t *testing.T) {
 	}
 	if decoded.DestinationFileName != original.DestinationFileName {
 		t.Errorf("DestinationFileName mismatch: got %v, want %v", decoded.DestinationFileName, original.DestinationFileName)
+	}
+}
+
+func TestFileDirectivePDU_ToBytesAndFromBytes(t *testing.T) {
+	// 1. Setup
+	originalHeader := ProtocolDataUnitHeader{
+		version:                        1,
+		pduType:                        false, // File Directive
+		direction:                      false,
+		transmissionMode:               Unacknowledged,
+		crcFlag:                        false,
+		LargeFileFlag:                  false,
+		pduDataFieldLength:             0, // This will be set by ToBytes
+		segmentationControl:            false,
+		lengthEntityID:                 2,
+		segmentMetadataFlag:            false,
+		lenghTransactionSequenceNumber: 2,
+		sourceEntityID:                 10,
+		transactionSequenceNumber:      100,
+		destinationEntityID:            20,
+	}
+
+	originalPDU := FileDirectivePDU{
+		Header:  originalHeader,
+		DirCode: MetadataPDU,
+		Data:    []byte{0x01, 0x02, 0x03, 0x04},
+	}
+
+	// The data field length is 1 byte for the directive code plus the length of the data
+	dataFieldLength := int16(1 + len(originalPDU.Data))
+
+	// 2. Serialize
+	pduBytes := originalPDU.ToBytes(dataFieldLength)
+	if pduBytes == nil {
+		t.Fatal("ToBytes returned nil")
+	}
+
+	// 3. Deserialize
+	var decodedPDU FileDirectivePDU
+	// We need to manually set the header's data field length before deserializing the rest
+	// because FromBytes relies on it to know how much data to read.
+	decodedPDU.Header.pduDataFieldLength = dataFieldLength
+	if err := decodedPDU.FromBytes(pduBytes); err != nil {
+		t.Fatalf("FromBytes failed: %v", err)
+	}
+
+	// 4. Compare
+	// The header's pduDataFieldLength is set during serialization, so we update the original to match
+	originalPDU.Header.pduDataFieldLength = dataFieldLength
+
+	if decodedPDU.Header.version != originalPDU.Header.version {
+		t.Errorf("Header.version mismatch: got %d, want %d", decodedPDU.Header.version, originalPDU.Header.version)
+	}
+	if decodedPDU.Header.pduDataFieldLength != originalPDU.Header.pduDataFieldLength {
+		t.Errorf("Header.pduDataFieldLength mismatch: got %d, want %d", decodedPDU.Header.pduDataFieldLength, originalPDU.Header.pduDataFieldLength)
+	}
+	if decodedPDU.DirCode != originalPDU.DirCode {
+		t.Errorf("DirCode mismatch: got %v, want %v", decodedPDU.DirCode, originalPDU.DirCode)
+	}
+
+	if len(decodedPDU.Data) != len(originalPDU.Data) {
+		t.Fatalf("Data length mismatch: got %d, want %d", len(decodedPDU.Data), len(originalPDU.Data))
+	}
+
+	for i := range originalPDU.Data {
+		if decodedPDU.Data[i] != originalPDU.Data[i] {
+			t.Errorf("Data mismatch at index %d: got %x, want %x", i, decodedPDU.Data[i], originalPDU.Data[i])
+		}
 	}
 }

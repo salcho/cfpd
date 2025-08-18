@@ -246,13 +246,13 @@ func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
 	return bytes.Bytes(), nil
 }
 
-func (h *ProtocolDataUnitHeader) FromBytes(data []byte) error {
+func (h *ProtocolDataUnitHeader) FromBytes(data []byte) (int, error) {
 	buf := bytes.NewReader(data)
 
 	// version, pduType, direction, transmissionMode, crcFlag, LargeFileFlag
 	var flags byte
 	if err := binary.Read(buf, binary.LittleEndian, &flags); err != nil {
-		return fmt.Errorf("failed to read flags: %v", err)
+		return 0, fmt.Errorf("failed to read flags: %v", err)
 	}
 	h.version = flags >> 5
 	h.pduType = (flags & 0b00010000) != 0
@@ -262,13 +262,13 @@ func (h *ProtocolDataUnitHeader) FromBytes(data []byte) error {
 	h.LargeFileFlag = (flags & 0b00000001) != 0
 
 	if err := binary.Read(buf, binary.LittleEndian, &h.pduDataFieldLength); err != nil {
-		return fmt.Errorf("failed to read pduDataFieldLength: %v", err)
+		return 0, fmt.Errorf("failed to read pduDataFieldLength: %v", err)
 	}
 
 	// segmentationControl, lengthEntityID, segmentMetadataFlag, lenghTransactionSequenceNumber
 	flags = 0
 	if err := binary.Read(buf, binary.LittleEndian, &flags); err != nil {
-		return fmt.Errorf("failed to read flags: %v", err)
+		return 0, fmt.Errorf("failed to read flags: %v", err)
 	}
 	h.segmentationControl = (flags & 0b10000000) != 0
 	h.lengthEntityID = ((flags & 0b01110000) >> 4) + 1 // +1 because it's minus one in the spec
@@ -276,16 +276,18 @@ func (h *ProtocolDataUnitHeader) FromBytes(data []byte) error {
 	h.lenghTransactionSequenceNumber = flags&0b00000111 + 1 // +1 because it's minus one in the spec
 
 	if err := binary.Read(buf, binary.LittleEndian, &h.sourceEntityID); err != nil {
-		return fmt.Errorf("failed to read sourceEntityID: %v", err)
+		return 0, fmt.Errorf("failed to read sourceEntityID: %v", err)
 	}
 	if err := binary.Read(buf, binary.LittleEndian, &h.transactionSequenceNumber); err != nil {
-		return fmt.Errorf("failed to read transactionSequenceNumber: %v", err)
+		return 0, fmt.Errorf("failed to read transactionSequenceNumber: %v", err)
 	}
 	if err := binary.Read(buf, binary.LittleEndian, &h.destinationEntityID); err != nil {
-		return fmt.Errorf("failed to read destinationEntityID: %v", err)
+		return 0, fmt.Errorf("failed to read destinationEntityID: %v", err)
 	}
 
-	return nil
+	// Return the number of bytes read
+	bytesRead := int(buf.Size()) - buf.Len()
+	return bytesRead, nil
 }
 
 func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, transactionID uint16) ProtocolDataUnitHeader {
@@ -318,12 +320,49 @@ type FileDirectivePDU struct {
 	Data    []byte
 }
 
-func (pdu FileDirectivePDU) ToBytes(dataFieldLength uint16) []byte {
+func (pdu FileDirectivePDU) ToBytes(dataFieldLength int16) []byte {
 	bytes := new(bytes.Buffer)
 
-	// bytes.Write(pdu.Header.ToBytes(dataFieldLength))
-	return bytes.Bytes()
+	header, error := pdu.Header.ToBytes(dataFieldLength)
+	if error != nil {
+		fmt.Println("Error converting header to bytes:", error)
+		return nil
+	}
+	bytes.Write(header)
 
+	bytes.WriteByte(byte(pdu.DirCode)) // 1 byte for directive code
+	bytes.Write(pdu.Data)              // write the data field
+
+	return bytes.Bytes()
+}
+
+func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
+	buf := bytes.NewReader(data)
+
+	// Read the header
+	hLen, err := pdu.Header.FromBytes(data)
+	if err != nil {
+		return fmt.Errorf("failed to read header: %v", err)
+	}
+	if hLen > len(data) || hLen < 0 {
+		return fmt.Errorf("invalid header length: %d", hLen)
+	}
+	buf.Seek(int64(hLen), 0) // Move the reader to the end of the header
+
+	// Read the directive code
+	var dirCode byte
+	if err := binary.Read(buf, binary.LittleEndian, &dirCode); err != nil {
+		return fmt.Errorf("failed to read directive code: %v", err)
+	}
+	pdu.DirCode = DirectiveCode(dirCode)
+
+	// Read the data field
+	pdu.Data = make([]byte, pdu.Header.pduDataFieldLength-1) // -1 for the directive code byte
+	if _, err := buf.Read(pdu.Data); err != nil {
+		return fmt.Errorf("failed to read data field: %v", err)
+	}
+
+	return nil
 }
 
 func (pdu FileDirectivePDU) GetHeader() ProtocolDataUnitHeader {
