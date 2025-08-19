@@ -170,6 +170,12 @@ func (d *DirectoryListingResponse) ToBytes() ([]byte, error) {
 	return bytes.Bytes(), nil
 }
 
+func (d *DirectoryListingResponse) FromBytes(data []byte) error {
+	_ = bytes.NewReader(data)
+
+	return nil
+}
+
 func NewDirectoryListingResponse(dirToList string, pathToRespond string) DirectoryListingResponse {
 	return DirectoryListingResponse{
 		ResponseCode:  true, // assuming success for this example
@@ -199,7 +205,7 @@ type ProtocolDataUnitHeader struct {
 	lengthEntityID                 byte   // number of octets in the entity ID minus one; 0 means 1 octet
 	segmentMetadataFlag            bool   // whether the PDU contains segment metadata, always false for file directives
 	lenghTransactionSequenceNumber uint8  // number of octets in the transaction sequence number minus one; 0 means 1 octet
-	sourceEntityID                 uint16 // identifies the entity that originated the transaction.
+	SourceEntityID                 uint16 // identifies the entity that originated the transaction.
 	transactionSequenceNumber      uint16 // uniquely identifies the transaction within the source entity
 	destinationEntityID            uint16 // identifies the final destination of the transaction’s metadata and file data
 }
@@ -251,7 +257,7 @@ func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
 	bytes.WriteByte(flags)
 
 	// sourceEntityID, transactionSequenceNumber, destinationEntityID
-	if err := binary.Write(bytes, binary.LittleEndian, h.sourceEntityID); err != nil {
+	if err := binary.Write(bytes, binary.LittleEndian, h.SourceEntityID); err != nil {
 		return []byte{}, fmt.Errorf("failed to write sourceEntityID: %v", err)
 	}
 	if err := binary.Write(bytes, binary.LittleEndian, h.transactionSequenceNumber); err != nil {
@@ -297,7 +303,7 @@ func (h *ProtocolDataUnitHeader) FromBytes(data []byte) (int, error) {
 	h.segmentMetadataFlag = (flags & 0b00001000) != 0
 	h.lenghTransactionSequenceNumber = flags&0b00000111 + 1 // +1 because it's minus one in the spec
 
-	if err := binary.Read(buf, binary.LittleEndian, &h.sourceEntityID); err != nil {
+	if err := binary.Read(buf, binary.LittleEndian, &h.SourceEntityID); err != nil {
 		return 0, fmt.Errorf("failed to read sourceEntityID: %v", err)
 	}
 	if err := binary.Read(buf, binary.LittleEndian, &h.transactionSequenceNumber); err != nil {
@@ -325,7 +331,7 @@ func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, tr
 		lengthEntityID:                 4, // 4 octets for uint32
 		segmentMetadataFlag:            false,
 		lenghTransactionSequenceNumber: 4, // 4 octets for uint32
-		sourceEntityID:                 srcEntityID,
+		SourceEntityID:                 srcEntityID,
 		transactionSequenceNumber:      transactionID,
 		destinationEntityID:            dstEntityID,
 	}
@@ -385,6 +391,29 @@ func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
 	}
 
 	return nil
+}
+
+func NewFileDirectivePDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, pduType PduType, closureRequested bool, srcFileName, dstFileName string, msgs []Message) (*FileDirectivePDU, error) {
+	pduHeader := NewPDUHeader(largeFileFlag, srcEntityID, dstEntityID, transactionID, pduType)
+
+	pduContents := MetadataPDUContents{
+		ClosureRequested:    closureRequested,
+		ChecksumType:        0xff, // Mock checksum for simplicity
+		FileSize:            0,
+		SourceFileName:      srcFileName,
+		DestinationFileName: dstFileName,
+		MessagesToUser:      msgs,
+	}
+	d, err := pduContents.ToBytes(pduHeader)
+	if err != nil {
+		fmt.Println("Error converting MetadataPDUContents to bytes:", err)
+		return nil, err
+	}
+	return &FileDirectivePDU{
+		Header:  pduHeader,
+		DirCode: MetadataPDU,
+		Data:    d,
+	}, nil
 }
 
 // ============= File Data PDUs

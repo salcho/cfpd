@@ -1,7 +1,9 @@
 package main
 
 import (
+	"log/slog"
 	"main/messages"
+	"os"
 	"time"
 )
 
@@ -68,6 +70,13 @@ func NewPutRequest(dst uint16, msgs ...messages.Message) RequestPrimitive {
 }
 
 func main() {
+	lvl := new(slog.LevelVar)
+	lvl.Set(slog.LevelDebug)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: lvl,
+	}))
+	slog.SetDefault(logger)
+
 	srvConf := ServiceConfig{
 		entityID: 1,
 		address:  "127.0.0.1:11234",
@@ -75,7 +84,8 @@ func main() {
 			0: "127.0.0.1:11235",
 		},
 	}
-	_ = NewEntity(1, "Server", &CFPDService{Config: srvConf})
+
+	_ = NewEntity(1, "Server", srvConf)
 
 	clientConf := ServiceConfig{
 		entityID: 0,
@@ -84,7 +94,7 @@ func main() {
 			1: "127.0.0.1:11234",
 		},
 	}
-	cEntity := NewEntity(0, "Client", &CFPDService{Config: clientConf})
+	cEntity := NewEntity(0, "Client", clientConf)
 	app := NewCFDPApp(&cEntity)
 	app.ListDirectory(1, "/path/to/local/dir", "/path/to/remote/dir")
 

@@ -13,58 +13,53 @@ type ServiceConfig struct {
 	addressTable map[uint16]string // entity IDs to addresses
 }
 
-type Service interface {
-	ProcessMessage(bytes []byte) error
-	RequestBytes(p []byte, dEntityID uint16) error
-	Bind() error
-	Listen()
-}
-
 type CFPDService struct {
 	Config      ServiceConfig
 	conn        *net.UDPConn
 	isListening bool
 }
 
-func (s *CFPDService) ProcessMessage(bytes []byte) error {
+func (s *CFPDService) ProcessMessage(bytes []byte) (*messages.FileDirectivePDU, error) {
 	if len(bytes) == 0 {
-		return fmt.Errorf("no data received")
+		return nil, fmt.Errorf("no data received")
 	}
 
 	header := messages.ProtocolDataUnitHeader{}
 	_, err := header.FromBytes(bytes)
 	if err != nil {
-		return fmt.Errorf("failed to decode header: %v", err)
+		return nil, fmt.Errorf("failed to decode header: %v", err)
 	}
 
 	if header.PduType == messages.FileDirective {
-		slog.Debug("Received File Directive PDU")
-		decoded := messages.FileDirectivePDU{}
-		err := decoded.FromBytes(bytes)
+		slog.Debug("Received File Directive PDU", "entityID", s.Config.entityID)
+		fdp := messages.FileDirectivePDU{}
+		err := fdp.FromBytes(bytes)
 		if err != nil {
-			return fmt.Errorf("failed to decode File Directive PDU: %v", err)
+			return nil, fmt.Errorf("failed to decode File Directive PDU: %v", err)
 		}
 
-		switch decoded.DirCode {
+		switch fdp.DirCode {
 		case messages.MetadataPDU:
-			slog.Debug("Received Metadata PDU")
+			slog.Debug("Received Metadata PDU", "entityID", s.Config.entityID)
 
 			metadata := messages.MetadataPDUContents{}
-			err = metadata.FromBytes(decoded.Data, decoded.Header)
+			err = metadata.FromBytes(fdp.Data, fdp.Header)
 			if err != nil {
-				return fmt.Errorf("failed to decode metadata: %v", err)
+				return nil, fmt.Errorf("failed to decode metadata: %v", err)
 			}
 
+			return &fdp, nil
+
 		default:
-			return fmt.Errorf("unknown directive code: %v", decoded.DirCode)
+			return nil, fmt.Errorf("unknown directive code: %v", fdp.DirCode)
 		}
 	}
 
-	return nil
+	return nil, fmt.Errorf("unsupported PDU type: %v", header.PduType)
 }
 
 func (s *CFPDService) RequestBytes(p []byte, dEntityID uint16) error {
-	addr, exists := s.config.addressTable[dEntityID]
+	addr, exists := s.Config.addressTable[dEntityID]
 	if !exists {
 		return fmt.Errorf("entity ID %d not found in address table", dEntityID)
 	}
@@ -90,8 +85,8 @@ func (s *CFPDService) RequestBytes(p []byte, dEntityID uint16) error {
 	return nil
 }
 
-func (s *CFPDService) Bind() error {
-	udpAddr, err := net.ResolveUDPAddr("udp", s.config.address)
+func (s *CFPDService) Bind(e *CFDPEntity) error {
+	udpAddr, err := net.ResolveUDPAddr("udp", s.Config.address)
 	if err != nil {
 		return fmt.Errorf("failed to resolve address: %w", err)
 	}
@@ -101,16 +96,16 @@ func (s *CFPDService) Bind() error {
 		return fmt.Errorf("failed to listen on UDP: %w", err)
 	}
 
-	slog.Info("CFDP service up!", "ID", s.config.entityID, "address", s.config.address)
+	slog.Info("CFDP service up!", "ID", s.Config.entityID, "address", s.Config.address)
 	s.isListening = true
 
 	s.conn = conn
-	go s.Listen()
+	go s.Listen(e)
 
 	return nil
 }
 
-func (s *CFPDService) Listen() {
+func (s *CFPDService) Listen(e *CFDPEntity) {
 	defer s.conn.Close()
 	for {
 		buf := make([]byte, 1024)
@@ -120,13 +115,16 @@ func (s *CFPDService) Listen() {
 			s.isListening = false
 			break
 		}
-		err = s.ProcessMessage(buf)
+		fdp, err := s.ProcessMessage(buf)
 		if err != nil {
 			fmt.Println("Error processing message:", err)
 			continue
 		}
+		if err := e.HandlePDU(*fdp); err != nil {
+			fmt.Println("Error handling PDU:", err)
+		}
 	}
 
 	s.isListening = false
-	fmt.Println("Stopped listening on", s.config.address)
+	fmt.Println("Stopped listening on", s.Config.address)
 }
