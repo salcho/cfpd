@@ -21,13 +21,9 @@ type Service interface {
 }
 
 type CFPDService struct {
-	config      ServiceConfig
+	Config      ServiceConfig
 	conn        *net.UDPConn
 	isListening bool
-}
-
-func NewService(sc ServiceConfig) *CFPDService {
-	return &CFPDService{config: sc}
 }
 
 func (s *CFPDService) ProcessMessage(bytes []byte) error {
@@ -42,20 +38,26 @@ func (s *CFPDService) ProcessMessage(bytes []byte) error {
 	}
 
 	if header.PduType == messages.FileDirective {
-		fmt.Println("Received File Directive PDU")
+		slog.Debug("Received File Directive PDU")
 		decoded := messages.FileDirectivePDU{}
 		err := decoded.FromBytes(bytes)
 		if err != nil {
 			return fmt.Errorf("failed to decode File Directive PDU: %v", err)
 		}
 
-		metadata := messages.MetadataPDUContents{}
-		err = metadata.FromBytes(decoded.Data, decoded.Header)
-		if err != nil {
-			return fmt.Errorf("failed to decode metadata: %v", err)
-		}
+		switch decoded.DirCode {
+		case messages.MetadataPDU:
+			slog.Debug("Received Metadata PDU")
 
-		fmt.Printf("Metadata PDU Contents: %#v", metadata)
+			metadata := messages.MetadataPDUContents{}
+			err = metadata.FromBytes(decoded.Data, decoded.Header)
+			if err != nil {
+				return fmt.Errorf("failed to decode metadata: %v", err)
+			}
+
+		default:
+			return fmt.Errorf("unknown directive code: %v", decoded.DirCode)
+		}
 	}
 
 	return nil
@@ -72,7 +74,7 @@ func (s *CFPDService) RequestBytes(p []byte, dEntityID uint16) error {
 		return fmt.Errorf("failed to resolve address %s: %w", addr, err)
 	}
 
-	slog.Info("Sending PDU", "entityID", dEntityID, "resolved", resolved)
+	slog.Debug("Sending PDU", "entityID", dEntityID, "resolved", resolved)
 	conn, err := net.DialUDP("udp", nil, resolved)
 	if err != nil {
 		return fmt.Errorf("failed to dial UDP: %w", err)
@@ -84,7 +86,7 @@ func (s *CFPDService) RequestBytes(p []byte, dEntityID uint16) error {
 		return fmt.Errorf("failed to send PDU: %w", err)
 	}
 
-	slog.Info("PDU sent successfully", "entityID", dEntityID)
+	slog.Debug("PDU sent successfully", "entityID", dEntityID)
 	return nil
 }
 
@@ -99,7 +101,7 @@ func (s *CFPDService) Bind() error {
 		return fmt.Errorf("failed to listen on UDP: %w", err)
 	}
 
-	fmt.Printf("Entity %d bound to address %s\n", s.config.entityID, s.config.address)
+	slog.Info("CFDP service up!", "ID", s.config.entityID, "address", s.config.address)
 	s.isListening = true
 
 	s.conn = conn

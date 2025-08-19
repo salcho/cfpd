@@ -75,8 +75,7 @@ func main() {
 			0: "127.0.0.1:11235",
 		},
 	}
-	s := NewService(srvConf)
-	s.Bind()
+	_ = NewEntity(1, "Server", &CFPDService{Config: srvConf})
 
 	clientConf := ServiceConfig{
 		entityID: 0,
@@ -85,7 +84,7 @@ func main() {
 			1: "127.0.0.1:11234",
 		},
 	}
-	cEntity := NewEntity(0, "Client", NewService(clientConf))
+	cEntity := NewEntity(0, "Client", &CFPDService{Config: clientConf})
 	app := NewCFDPApp(&cEntity)
 	app.ListDirectory(1, "/path/to/local/dir", "/path/to/remote/dir")
 

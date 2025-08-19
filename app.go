@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"log/slog"
 	"main/messages"
 )
 
@@ -21,7 +21,7 @@ func NewCFDPApp(e *CFDPEntity) CFDPApp {
 }
 
 func (app *cfpdApp) ListDirectory(dstEntityID uint16, localPath, remotePath string) error {
-	fmt.Println("Listing directory ", remotePath, "@", dstEntityID, ", will store in local path", localPath, "@", app.entity.ID)
+	slog.Info("Listing remote directory", "remotePath", remotePath, "remoteEntity", dstEntityID, "localPath", localPath, "localEntity", app.entity.ID)
 
 	app.entity.PutRequest(PutParameters{
 		DstEntityID:           &dstEntityID,

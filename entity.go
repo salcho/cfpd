@@ -55,12 +55,12 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 	// TODO: implement closure requested handling
 
 	dstID := *p.DstEntityID
-	slog.Info("Sending Put.request", "from", c.ID, "to", dstID)
+	slog.Debug("Sending Put.request", "from", c.ID, "to", dstID)
 	for _, msg := range p.MessagesToUser {
 		switch msg.GetMessageType() {
 		case messages.MessageTypeDirectoryRequest:
 			listingRequest := msg.(*messages.DirectoryListingRequest)
-			slog.Info("Sending Directory Request", "dir", listingRequest.DirToList, "file", listingRequest.PathToRespond, "from", c.ID, "dst", dstID)
+			slog.Debug("Sending Directory Request", "dir", listingRequest.DirToList, "file", listingRequest.PathToRespond, "from", c.ID, "dst", dstID)
 
 			// Create a FileDirective PDU to send metadata about the directory listing
 			// TODO: assign sequence number and transaction ID properly
