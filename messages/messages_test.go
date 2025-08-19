@@ -89,7 +89,7 @@ func TestProtocolDataUnitHeader_ToBytesAndFromBytes(t *testing.T) {
 		lengthEntityID:                 4,
 		segmentMetadataFlag:            true,
 		lenghTransactionSequenceNumber: 4,
-		sourceEntityID:                 0x1234,
+		SourceEntityID:                 0x1234,
 		transactionSequenceNumber:      0x5678,
 		destinationEntityID:            0x9ABC,
 	}
@@ -144,8 +144,8 @@ func TestProtocolDataUnitHeader_ToBytesAndFromBytes(t *testing.T) {
 	if decoded.lenghTransactionSequenceNumber != original.lenghTransactionSequenceNumber {
 		t.Errorf("lenghTransactionSequenceNumber mismatch: got %v, want %v", decoded.lenghTransactionSequenceNumber, original.lenghTransactionSequenceNumber)
 	}
-	if decoded.sourceEntityID != original.sourceEntityID {
-		t.Errorf("sourceEntityID mismatch: got %v, want %v", decoded.sourceEntityID, original.sourceEntityID)
+	if decoded.SourceEntityID != original.SourceEntityID {
+		t.Errorf("SourceEntityID mismatch: got %v, want %v", decoded.SourceEntityID, original.SourceEntityID)
 	}
 	if decoded.transactionSequenceNumber != original.transactionSequenceNumber {
 		t.Errorf("transactionSequenceNumber mismatch: got %v, want %v", decoded.transactionSequenceNumber, original.transactionSequenceNumber)
@@ -247,7 +247,7 @@ func TestFileDirectivePDU_ToBytesAndFromBytes(t *testing.T) {
 		lengthEntityID:                 2,
 		segmentMetadataFlag:            false,
 		lenghTransactionSequenceNumber: 2,
-		sourceEntityID:                 10,
+		SourceEntityID:                 10,
 		transactionSequenceNumber:      100,
 		destinationEntityID:            20,
 	}
