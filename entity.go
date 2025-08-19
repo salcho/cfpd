@@ -77,6 +77,7 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 		case messages.MessageTypeDirectoryResponse:
 			listingResponse := msg.(*messages.DirectoryListingResponse)
 			slog.Debug("Sending Directory Response", "remote", listingResponse.PathToRespond, "local", listingResponse.DirToList, "from", c.ID, "dst", dstID)
+
 		default:
 			fmt.Println(c.ID, "Unknown request primitive: ", msg.GetMessageType())
 			return fmt.Errorf("unknown request primitive: %s", msg.GetMessageType())

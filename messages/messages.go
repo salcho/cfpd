@@ -392,10 +392,91 @@ func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, tr
 	}
 }
 
-// type FileDataPDU struct {
-// 	header ProtocolDataUnitHeader
-// 	data   []byte
-// }
+type FileDataPDU struct {
+	Header   ProtocolDataUnitHeader
+	Offset   uint16 // offset in the file data, used for segmentation
+	FileData []byte
+}
+
+func (pdu *FileDataPDU) ToBytes(dataFieldLength int16) []byte {
+	bytes := new(buf.Buffer)
+
+	Header, error := pdu.Header.ToBytes(dataFieldLength)
+	if error != nil {
+		fmt.Println("Error converting Header to bytes:", error)
+		return nil
+	}
+	bytes.Write(Header)
+
+	// record continuation state, 2 bits - Present if and only if the value of the segment metadata flag in the PDU Header is 1.
+	// 00 - this PDU is neither the start nor end of any record,
+	//      if `segmentationControl`, then this is a continuation PDU, otherwise this indicates file has no records
+	// 01 - this PDU is the first octet of a record and the end of the record is not within this PDU
+	// 10 - this PDU is the last octet of a record and the start of the record is not within this PDU
+	// 11 - this PDU is both the first and last octet of a record, i.e. the record is contained within this PDU
+
+	// TODO: implement this properly
+	if pdu.Header.segmentMetadataFlag {
+		bytes.WriteByte(0b01)
+		// segment metadata length, 6 bits - Present if and only if the value of the segment metadata flag in the PDU Header is 1.
+		bytes.WriteByte(0b00000000) // 0 for now, no segment metadata
+		// No segment metadata bytes are written if length is 0
+	}
+
+	bytes.WriteByte(byte(pdu.Offset >> 8)) // 2 bytes for offset, left-shifted by 8 bits to fit in 2 bytes
+	bytes.WriteByte(byte(pdu.Offset))
+
+	bytes.Write(pdu.FileData) // write the file data
+
+	return bytes.Bytes()
+}
+
+func (pdu *FileDataPDU) FromBytes(data []byte) error {
+	buf := buf.NewReader(data)
+
+	// Read the Header
+	hLen, err := pdu.Header.FromBytes(data)
+	if err != nil {
+		return fmt.Errorf("failed to read Header: %v", err)
+	}
+	if hLen > len(data) || hLen < 0 {
+		return fmt.Errorf("invalid Header length: %d", hLen)
+	}
+	buf.Seek(int64(hLen), 0) // Move the reader to the end of the Header
+
+	if pdu.Header.segmentMetadataFlag {
+		// Read the record continuation state
+		var recordContinuationState byte
+		if err := binary.Read(buf, binary.LittleEndian, &recordContinuationState); err != nil {
+			return fmt.Errorf("failed to read record continuation state: %v", err)
+		}
+		// Read the segment metadata length
+		var segmentMetadataLength byte
+		if err := binary.Read(buf, binary.LittleEndian, &segmentMetadataLength); err != nil {
+			return fmt.Errorf("failed to read segment metadata length: %v", err)
+		}
+		// Read the segment metadata if length > 0
+		if segmentMetadataLength > 0 {
+			segmentMetadata := make([]byte, segmentMetadataLength)
+			if _, err := buf.Read(segmentMetadata); err != nil {
+				return fmt.Errorf("failed to read segment metadata: %v", err)
+			}
+		}
+	}
+
+	// Read the offset
+	if err := binary.Read(buf, binary.BigEndian, &pdu.Offset); err != nil {
+		return fmt.Errorf("failed to read offset: %v", err)
+	}
+
+	// Read the file data
+	pdu.FileData = make([]byte, buf.Len())
+	if _, err := buf.Read(pdu.FileData); err != nil {
+		return fmt.Errorf("failed to read file data: %v", err)
+	}
+
+	return nil
+}
 
 type FileDirectivePDU struct {
 	Header  ProtocolDataUnitHeader

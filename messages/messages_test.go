@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"bytes"
 	"testing"
 )
 
@@ -449,6 +450,80 @@ func TestDirectoryListingResponse_ToBytesAndFromBytes(t *testing.T) {
 		}
 		if decoded.PathToRespond != original.PathToRespond {
 			t.Errorf("PathToRespond mismatch: got %q, want %q", decoded.PathToRespond, original.PathToRespond)
+		}
+	})
+}
+
+func TestFileDataPDU_ToBytesAndFromBytes(t *testing.T) {
+	t.Run("WithoutSegmentMetadata", func(t *testing.T) {
+		// 1. Setup
+		header := NewPDUHeader(false, 1, 2, 123, FileData)
+		header.segmentMetadataFlag = false
+
+		fileData := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+		// Data field length = 2 bytes for offset + 4 bytes for file data
+		dataFieldLength := int16(2 + len(fileData))
+
+		original := &FileDataPDU{
+			Header:   header,
+			Offset:   1024,
+			FileData: fileData,
+		}
+
+		// 2. Serialize
+		pduBytes := original.ToBytes(dataFieldLength)
+
+		// 3. Deserialize
+		decoded := &FileDataPDU{}
+		if err := decoded.FromBytes(pduBytes); err != nil {
+			t.Fatalf("FromBytes() failed: %v", err)
+		}
+
+		// 4. Compare (can now access exported fields)
+		if decoded.Offset != original.Offset {
+			t.Errorf("Offset mismatch: got %d, want %d", decoded.Offset, original.Offset)
+		}
+		if !bytes.Equal(decoded.FileData, original.FileData) {
+			t.Errorf("FileData mismatch: got %X, want %X", decoded.FileData, original.FileData)
+		}
+		if decoded.Header.SourceEntityID != original.Header.SourceEntityID {
+			t.Errorf("Header SourceEntityID mismatch: got %d, want %d", decoded.Header.SourceEntityID, original.Header.SourceEntityID)
+		}
+	})
+
+	t.Run("WithSegmentMetadata", func(t *testing.T) {
+		// 1. Setup
+		header := NewPDUHeader(false, 3, 4, 456, FileData)
+		header.segmentMetadataFlag = true // Enable metadata
+
+		fileData := []byte{0xCA, 0xFE}
+		// Data field length = 1 (cont state) + 1 (meta len) + 2 (offset) + 2 (file data) = 6
+		dataFieldLength := int16(1 + 1 + 2 + len(fileData))
+
+		original := &FileDataPDU{
+			Header:   header,
+			Offset:   2048,
+			FileData: fileData,
+		}
+
+		// 2. Serialize
+		pduBytes := original.ToBytes(dataFieldLength)
+
+		// 3. Deserialize
+		decoded := &FileDataPDU{}
+		if err := decoded.FromBytes(pduBytes); err != nil {
+			t.Fatalf("FromBytes() failed: %v", err)
+		}
+
+		// 4. Compare
+		if decoded.Offset != original.Offset {
+			t.Errorf("Offset mismatch: got %d, want %d", decoded.Offset, original.Offset)
+		}
+		if !bytes.Equal(decoded.FileData, original.FileData) {
+			t.Errorf("FileData mismatch: got %X, want %X", decoded.FileData, original.FileData)
+		}
+		if !decoded.Header.segmentMetadataFlag {
+			t.Error("Expected segmentMetadataFlag to be true after deserialization")
 		}
 	})
 }
