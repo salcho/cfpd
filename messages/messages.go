@@ -1,9 +1,10 @@
 package messages
 
 import (
-	"bytes"
+	buf "bytes"
 	"encoding/binary"
 	"fmt"
+	"reflect"
 )
 
 type TransmissionMode uint
@@ -57,11 +58,8 @@ func (mt MessageType) String() string {
 // ============= Originating Transaction ID
 
 type OriginatingTransactionID struct {
-	lengthEntityID                 uint8 // number of octets in the entity ID minus one; 0 means 1 octet
-	reservedTwo                    bool
-	lenghTransactionSequenceNumber uint8 // number of octets in the transaction sequence number minus one
-	SourceEntityID                 uint  // unsigned binary integer of length lengthEntityID
-	TransactionSequenceNumber      uint  // uniquely identifies the transaction within the source entity
+	SourceEntityID            uint16
+	TransactionSequenceNumber uint16
 }
 
 func (o OriginatingTransactionID) GetMessageType() MessageType {
@@ -69,19 +67,49 @@ func (o OriginatingTransactionID) GetMessageType() MessageType {
 }
 
 func (o OriginatingTransactionID) ToBytes() ([]byte, error) {
-	bytes := new(bytes.Buffer)
+	bytes := new(buf.Buffer)
 
-	// TODO: implement the actual serialization logic
+	bytes.WriteByte(byte(reflect.TypeOf(o.SourceEntityID).Size() - 1))
+	bytes.WriteByte(byte(reflect.TypeOf(o.TransactionSequenceNumber).Size() - 1))
+
+	if err := binary.Write(bytes, binary.LittleEndian, o.SourceEntityID); err != nil {
+		return nil, fmt.Errorf("failed to write sourceEntityID: %v", err)
+	}
+	if err := binary.Write(bytes, binary.LittleEndian, o.TransactionSequenceNumber); err != nil {
+		return nil, fmt.Errorf("failed to write transactionSequenceNumber: %v", err)
+	}
+
 	return bytes.Bytes(), nil
 }
 
-func NewOriginatingTransactionID(sourceEntityID uint, transactionSequenceNumber uint) OriginatingTransactionID {
+func (o *OriginatingTransactionID) FromBytes(data []byte) error {
+	buf := buf.NewReader(data)
+
+	// Read and discard the length prefix for SourceEntityID
+	if _, err := buf.ReadByte(); err != nil {
+		return fmt.Errorf("failed to read sourceEntityID size: %v", err)
+	}
+
+	// Read and discard the length prefix for TransactionSequenceNumber
+	if _, err := buf.ReadByte(); err != nil {
+		return fmt.Errorf("failed to read transactionSequenceNumber size: %v", err)
+	}
+
+	// Read the actual values, which matches the ToBytes implementation
+	if err := binary.Read(buf, binary.LittleEndian, &o.SourceEntityID); err != nil {
+		return fmt.Errorf("failed to read sourceEntityID: %v", err)
+	}
+	if err := binary.Read(buf, binary.LittleEndian, &o.TransactionSequenceNumber); err != nil {
+		return fmt.Errorf("failed to read transactionSequenceNumber: %v", err)
+	}
+
+	return nil
+}
+
+func NewOriginatingTransactionID(sourceEntityID uint16, transactionSequenceNumber uint16) OriginatingTransactionID {
 	return OriginatingTransactionID{
-		lengthEntityID:                 0, // 1 octet
-		reservedTwo:                    false,
-		lenghTransactionSequenceNumber: 0, // 1 octet
-		SourceEntityID:                 sourceEntityID,
-		TransactionSequenceNumber:      transactionSequenceNumber,
+		SourceEntityID:            sourceEntityID,
+		TransactionSequenceNumber: transactionSequenceNumber,
 	}
 }
 
@@ -97,7 +125,7 @@ func (d *DirectoryListingRequest) GetMessageType() MessageType {
 }
 
 func (d *DirectoryListingRequest) ToBytes() ([]byte, error) {
-	bytes := new(bytes.Buffer)
+	bytes := new(buf.Buffer)
 
 	bytes.WriteString("cfpd")
 	bytes.WriteByte(byte(d.GetMessageType()))
@@ -112,7 +140,7 @@ func (d *DirectoryListingRequest) ToBytes() ([]byte, error) {
 }
 
 func (d *DirectoryListingRequest) FromBytes(data []byte) error {
-	buf := bytes.NewReader(data)
+	buf := buf.NewReader(data)
 
 	var magic [4]byte
 	if _, err := buf.Read(magic[:]); err != nil {
@@ -154,8 +182,7 @@ func (d *DirectoryListingRequest) FromBytes(data []byte) error {
 }
 
 type DirectoryListingResponse struct {
-	ResponseCode  bool   // true if the directory listing was successful, false otherwise
-	Spare         uint8  // all zeros, 7 bits
+	WasSuccessful bool   // true if the directory listing was successful, false otherwise
 	DirToList     string // the directory that was listed, taken from the listing request
 	PathToRespond string // full file path local to the caller, taken from the listing request
 }
@@ -165,24 +192,52 @@ func (d *DirectoryListingResponse) GetMessageType() MessageType {
 }
 
 func (d *DirectoryListingResponse) ToBytes() ([]byte, error) {
-	bytes := new(bytes.Buffer)
-	//TODO: implement the actual serialization logic
+	bytes := new(buf.Buffer)
+
+	var flags byte
+	if d.WasSuccessful {
+		flags |= 0b10000000
+	}
+	bytes.WriteByte(flags)
+
+	// dirToList LV pair
+	bytes.WriteByte(byte(len(d.DirToList)))
+	bytes.WriteString(d.DirToList)
+
+	// pathToRespond LV pair
+	bytes.WriteByte(byte(len(d.PathToRespond)))
+	bytes.WriteString(d.PathToRespond)
+
 	return bytes.Bytes(), nil
 }
 
 func (d *DirectoryListingResponse) FromBytes(data []byte) error {
-	_ = bytes.NewReader(data)
+	buf := buf.NewReader(data)
 
-	return nil
-}
-
-func NewDirectoryListingResponse(dirToList string, pathToRespond string) DirectoryListingResponse {
-	return DirectoryListingResponse{
-		ResponseCode:  true, // assuming success for this example
-		Spare:         0,
-		DirToList:     dirToList,
-		PathToRespond: pathToRespond,
+	var flags byte
+	if err := binary.Read(buf, binary.LittleEndian, &flags); err != nil {
+		return fmt.Errorf("failed to read flags: %v", err)
 	}
+	d.WasSuccessful = (flags & 0b10000000) != 0
+	var dirToListLen byte
+	if err := binary.Read(buf, binary.LittleEndian, &dirToListLen); err != nil {
+		return fmt.Errorf("failed to read directory length: %v", err)
+	}
+	dirToList := make([]byte, dirToListLen)
+	if _, err := buf.Read(dirToList); err != nil {
+		return fmt.Errorf("failed to read directory name: %v", err)
+	}
+	var pathToRespondLen byte
+	if err := binary.Read(buf, binary.LittleEndian, &pathToRespondLen); err != nil {
+		return fmt.Errorf("failed to read path length: %v", err)
+	}
+	pathToRespond := make([]byte, pathToRespondLen)
+	if _, err := buf.Read(pathToRespond); err != nil {
+		return fmt.Errorf("failed to read path name: %v", err)
+	}
+	d.DirToList = string(dirToList)
+	d.PathToRespond = string(pathToRespond)
+	return nil
 }
 
 // ============= Protocol Data Units
@@ -214,7 +269,7 @@ func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
 	if dataFieldLength < 0 {
 		return nil, fmt.Errorf("data field length must be non-negative")
 	}
-	bytes := new(bytes.Buffer)
+	bytes := new(buf.Buffer)
 
 	// version, pduType, direction, transmissionMode, crcFlag, LargeFileFlag
 	var flags byte
@@ -271,7 +326,7 @@ func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
 }
 
 func (h *ProtocolDataUnitHeader) FromBytes(data []byte) (int, error) {
-	buf := bytes.NewReader(data)
+	buf := buf.NewReader(data)
 
 	// version, pduType, direction, transmissionMode, crcFlag, LargeFileFlag
 	var flags byte
@@ -349,7 +404,7 @@ type FileDirectivePDU struct {
 }
 
 func (pdu FileDirectivePDU) ToBytes(dataFieldLength int16) []byte {
-	bytes := new(bytes.Buffer)
+	bytes := new(buf.Buffer)
 
 	header, error := pdu.Header.ToBytes(dataFieldLength)
 	if error != nil {
@@ -365,7 +420,7 @@ func (pdu FileDirectivePDU) ToBytes(dataFieldLength int16) []byte {
 }
 
 func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
-	buf := bytes.NewReader(data)
+	buf := buf.NewReader(data)
 
 	// Read the header
 	hLen, err := pdu.Header.FromBytes(data)
@@ -504,7 +559,7 @@ type MetadataPDUContents struct {
 
 func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) ([]byte, error) {
 	// reserved bits left as 0
-	bytes := new(bytes.Buffer)
+	bytes := new(buf.Buffer)
 
 	// first byte: reserved bits, ClosureRequested
 	var flags byte
@@ -545,7 +600,7 @@ func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) ([]byte, error) {
 }
 
 func (m *MetadataPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) error {
-	buf := bytes.NewReader(data)
+	buf := buf.NewReader(data)
 
 	// Flags
 	var flags byte
@@ -654,14 +709,14 @@ type TLVFormat struct {
 }
 
 func (t TLVFormat) ToBytes() []byte {
-	bytes := new(bytes.Buffer)
+	bytes := new(buf.Buffer)
 	bytes.WriteByte(byte(t.Type))
 	bytes.WriteByte(byte(len(t.Value)))
 	bytes.Write(t.Value)
 	return bytes.Bytes()
 }
 
-func (t *TLVFormat) FromBytes(data *bytes.Reader) error {
+func (t *TLVFormat) FromBytes(data *buf.Reader) error {
 	b, err := data.ReadByte()
 	if err != nil {
 		return fmt.Errorf("failed to read TLV type: %v", err)

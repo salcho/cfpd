@@ -95,7 +95,7 @@ func main() {
 		},
 	}
 	cEntity := NewEntity(0, "Client", clientConf)
-	app := NewCFDPApp(&cEntity)
+	app := CFDPApp{Entity: &cEntity}
 	app.ListDirectory(1, "/path/to/local/dir", "/path/to/remote/dir")
 
 	// listingRequest := RequestPrimitive{

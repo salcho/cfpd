@@ -356,3 +356,99 @@ func TestMetadataPDUContents_WithOptions(t *testing.T) {
 		}
 	}
 }
+
+func TestOriginatingTransactionID_ToBytesAndFromBytes(t *testing.T) {
+	// 1. Setup
+	original := NewOriginatingTransactionID(0x1234, 0xABCD)
+
+	// 2. Serialize
+	data, err := original.ToBytes()
+	if err != nil {
+		t.Fatalf("ToBytes() failed: %v", err)
+	}
+
+	// Expect 1 byte for each length prefix + 2 bytes for each uint16 = 6 bytes total
+	if len(data) != 6 {
+		t.Fatalf("Expected serialized data to be 6 bytes, but got %d", len(data))
+	}
+
+	// 3. Deserialize
+	var decoded OriginatingTransactionID
+	if err := decoded.FromBytes(data); err != nil {
+		t.Fatalf("FromBytes() failed: %v", err)
+	}
+
+	// 4. Compare
+	if decoded.SourceEntityID != original.SourceEntityID {
+		t.Errorf("SourceEntityID mismatch: got %X, want %X", decoded.SourceEntityID, original.SourceEntityID)
+	}
+	if decoded.TransactionSequenceNumber != original.TransactionSequenceNumber {
+		t.Errorf("TransactionSequenceNumber mismatch: got %X, want %X", decoded.TransactionSequenceNumber, original.TransactionSequenceNumber)
+	}
+}
+
+func TestDirectoryListingResponse_ToBytesAndFromBytes(t *testing.T) {
+	t.Run("SuccessfulResponse", func(t *testing.T) {
+		// 1. Setup
+		original := &DirectoryListingResponse{
+			WasSuccessful: true,
+			DirToList:     "/remote/dir",
+			PathToRespond: "/local/listing.txt",
+		}
+
+		// 2. Serialize
+		data, err := original.ToBytes()
+		if err != nil {
+			t.Fatalf("ToBytes() failed: %v", err)
+		}
+
+		// 3. Deserialize
+		var decoded DirectoryListingResponse
+		if err := decoded.FromBytes(data); err != nil {
+			t.Fatalf("FromBytes() failed: %v", err)
+		}
+
+		// 4. Compare
+		if decoded.WasSuccessful != original.WasSuccessful {
+			t.Errorf("WasSuccessful mismatch: got %v, want %v", decoded.WasSuccessful, original.WasSuccessful)
+		}
+		if decoded.DirToList != original.DirToList {
+			t.Errorf("DirToList mismatch: got %q, want %q", decoded.DirToList, original.DirToList)
+		}
+		if decoded.PathToRespond != original.PathToRespond {
+			t.Errorf("PathToRespond mismatch: got %q, want %q", decoded.PathToRespond, original.PathToRespond)
+		}
+	})
+
+	t.Run("UnsuccessfulResponse", func(t *testing.T) {
+		// 1. Setup
+		original := &DirectoryListingResponse{
+			WasSuccessful: false,
+			DirToList:     "/another/dir",
+			PathToRespond: "/another/path.txt",
+		}
+
+		// 2. Serialize
+		data, err := original.ToBytes()
+		if err != nil {
+			t.Fatalf("ToBytes() failed: %v", err)
+		}
+
+		// 3. Deserialize
+		var decoded DirectoryListingResponse
+		if err := decoded.FromBytes(data); err != nil {
+			t.Fatalf("FromBytes() failed: %v", err)
+		}
+
+		// 4. Compare
+		if decoded.WasSuccessful != original.WasSuccessful {
+			t.Errorf("WasSuccessful mismatch: got %v, want %v", decoded.WasSuccessful, original.WasSuccessful)
+		}
+		if decoded.DirToList != original.DirToList {
+			t.Errorf("DirToList mismatch: got %q, want %q", decoded.DirToList, original.DirToList)
+		}
+		if decoded.PathToRespond != original.PathToRespond {
+			t.Errorf("PathToRespond mismatch: got %q, want %q", decoded.PathToRespond, original.PathToRespond)
+		}
+	})
+}

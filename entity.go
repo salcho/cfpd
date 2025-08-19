@@ -74,6 +74,9 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 			if err := c.service.RequestBytes(pdu.ToBytes(int16(len(pdu.Data))), dstID); err != nil {
 				fmt.Println("Error sending PDU:", err)
 			}
+		case messages.MessageTypeDirectoryResponse:
+			listingResponse := msg.(*messages.DirectoryListingResponse)
+			slog.Debug("Sending Directory Response", "remote", listingResponse.PathToRespond, "local", listingResponse.DirToList, "from", c.ID, "dst", dstID)
 		default:
 			fmt.Println(c.ID, "Unknown request primitive: ", msg.GetMessageType())
 			return fmt.Errorf("unknown request primitive: %s", msg.GetMessageType())
@@ -117,7 +120,7 @@ func (c CFDPEntity) HandlePDU(pdu messages.FileDirectivePDU) error {
 func (c CFDPEntity) UploadDirectoryListing(pdu messages.FileDirectivePDU, m messages.MetadataPDUContents) error {
 	slog.Info("Uploading directory listing", "local", m.DestinationFileName, "uploadTo", m.SourceFileName, "localEntity", c.ID, "remoteEntity", pdu.Header.SourceEntityID)
 
-	l, err := c.fs.ListDirectory(m.DestinationFileName)
+	_, err := c.fs.ListDirectory(m.DestinationFileName)
 	if err != nil {
 		return fmt.Errorf("failed to list directory: %v", err)
 	}
@@ -133,8 +136,14 @@ func (c CFDPEntity) UploadDirectoryListing(pdu messages.FileDirectivePDU, m mess
 		ClosureRequested:      true,
 		MessagesToUser: []messages.Message{
 			&messages.DirectoryListingResponse{
-				DirToList:     l,
+				WasSuccessful: true,
+				DirToList:     m.DestinationFileName,
 				PathToRespond: m.SourceFileName,
+			},
+			// TODO: use a proper transaction ID
+			&messages.OriginatingTransactionID{
+				SourceEntityID:            c.ID,
+				TransactionSequenceNumber: 12345,
 			},
 		},
 		FilestoreRequests: []string{},
