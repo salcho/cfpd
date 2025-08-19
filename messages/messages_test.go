@@ -18,7 +18,10 @@ func TestMetadataPDUContents_ToBytesAndFromBytes(t *testing.T) {
 	}
 
 	// Encode to bytes
-	data := original.ToBytes(header)
+	data, err := original.ToBytes(header)
+	if err != nil {
+		t.Fatalf("ToBytes failed: %v", err)
+	}
 
 	// Decode from bytes
 	var decoded MetadataPDUContents
@@ -54,7 +57,11 @@ func TestMetadataPDUContents_SmallFileFlag(t *testing.T) {
 		DestinationFileName: "bar",
 	}
 
-	data := original.ToBytes(header)
+	data, err := original.ToBytes(header)
+	if err != nil {
+		t.Fatalf("ToBytes failed: %v", err)
+	}
+
 	var decoded MetadataPDUContents
 	decoded.FromBytes(data, header)
 
@@ -161,7 +168,10 @@ func TestMetadataPDUContents_ToBytesAndFromBytes_LargeFile(t *testing.T) {
 	}
 
 	// Serialize
-	b := original.ToBytes(header)
+	b, err := original.ToBytes(header)
+	if err != nil {
+		t.Fatalf("ToBytes failed: %v", err)
+	}
 
 	// Deserialize
 	var decoded MetadataPDUContents
@@ -200,7 +210,10 @@ func TestMetadataPDUContents_ToBytesAndFromBytes_SmallFile(t *testing.T) {
 	}
 
 	// Serialize
-	b := original.ToBytes(header)
+	b, err := original.ToBytes(header)
+	if err != nil {
+		t.Fatalf("ToBytes failed: %v", err)
+	}
 
 	// Deserialize
 	var decoded MetadataPDUContents
@@ -299,21 +312,23 @@ func TestMetadataPDUContents_WithOptions(t *testing.T) {
 		FileSize:            1024,
 		SourceFileName:      "src.dat",
 		DestinationFileName: "dest.dat",
-		Options: []TLVFormat{
-			{
-				Type:   FlowLabel,
-				Length: 4,
-				Value:  []byte{0xDE, 0xAD, 0xBE, 0xEF},
-			}, {
-				Type:   MessagesToUser,
-				Length: 8,
-				Value:  []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF},
+		MessagesToUser: []Message{
+			&DirectoryListingRequest{
+				DirToList:     "foo",
+				PathToRespond: "bar",
+			},
+			&DirectoryListingRequest{
+				DirToList:     "caz",
+				PathToRespond: "qwe",
 			},
 		},
 	}
 
 	// 2. Serialize
-	data := original.ToBytes(header)
+	data, err := original.ToBytes(header)
+	if err != nil {
+		t.Fatalf("ToBytes failed: %v", err)
+	}
 
 	// 3. Deserialize
 	var decoded MetadataPDUContents
@@ -330,20 +345,14 @@ func TestMetadataPDUContents_WithOptions(t *testing.T) {
 	}
 
 	// 5. Compare Options
-	if len(decoded.Options) != len(original.Options) {
-		t.Fatalf("Options length mismatch: got %d, want %d", len(decoded.Options), len(original.Options))
+	if len(decoded.MessagesToUser) != len(original.MessagesToUser) {
+		t.Fatalf("MessagesToUser length mismatch: got %d, want %d", len(decoded.MessagesToUser), len(original.MessagesToUser))
 	}
 
-	for i, originalOpt := range original.Options {
-		decodedOpt := decoded.Options[i]
-		if decodedOpt.Type != originalOpt.Type {
-			t.Errorf("Option %d Type mismatch: got %v, want %v", i, decodedOpt.Type, originalOpt.Type)
-		}
-		if decodedOpt.Length != originalOpt.Length {
-			t.Errorf("Option %d Length mismatch: got %d, want %d", i, decodedOpt.Length, originalOpt.Length)
-		}
-		if string(decodedOpt.Value) != string(originalOpt.Value) {
-			t.Errorf("Option %d Value mismatch: got %x, want %x", i, decodedOpt.Value, originalOpt.Value)
+	for i, originalOpt := range original.MessagesToUser {
+		decodedOpt := decoded.MessagesToUser[i]
+		if originalOpt.GetMessageType() != decodedOpt.GetMessageType() {
+			t.Errorf("Option %d Type mismatch: got %v, want %v", i, decodedOpt.GetMessageType(), originalOpt.GetMessageType())
 		}
 	}
 }

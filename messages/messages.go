@@ -18,35 +18,9 @@ const (
 
 // ============= Protocol Messages
 type Message interface {
-	GetHeader() MessageHeader
 	GetMessageType() MessageType
-}
-
-type MessageImpl struct {
-	Header      MessageHeader
-	MessageType MessageType
-}
-
-// func (m MessageImpl) ToBytes() ([]byte, error) {
-// 	bytes := []byte{}
-// 	// Header
-// 	bytes = append(bytes, "cfpd"...)
-// 	bytes = append(bytes, byte(m.MessageType))
-
-// 	// bytes = append(bytes, 0x1)
-// 	return bytes, nil
-// }
-
-func (m MessageImpl) GetHeader() MessageHeader {
-	return m.Header
-}
-
-func (m MessageImpl) GetMessageType() MessageType {
-	return m.MessageType
-}
-
-func (m MessageImpl) String() string {
-	return fmt.Sprintf("Message{header: %s, messageType: %s}", m.Header.GetMagic(), m.MessageType)
+	ToBytes() ([]byte, error)
+	FromBytes(data []byte) error
 }
 
 type MessageType byte
@@ -80,27 +54,9 @@ func (mt MessageType) String() string {
 	}
 }
 
-type MessageHeader interface {
-	GetMagic() string
-}
-
-type MessageHeaderImpl struct {
-	Magic string
-}
-
-func (h MessageHeaderImpl) GetMagic() string {
-	return h.Magic
-}
-
-func NewHeader() MessageHeader {
-	return &MessageHeaderImpl{Magic: "cfpd"}
-}
-
 // ============= Originating Transaction ID
 
 type OriginatingTransactionID struct {
-	MessageImpl
-	reserved                       bool
 	lengthEntityID                 uint8 // number of octets in the entity ID minus one; 0 means 1 octet
 	reservedTwo                    bool
 	lenghTransactionSequenceNumber uint8 // number of octets in the transaction sequence number minus one
@@ -108,13 +64,19 @@ type OriginatingTransactionID struct {
 	TransactionSequenceNumber      uint  // uniquely identifies the transaction within the source entity
 }
 
+func (o OriginatingTransactionID) GetMessageType() MessageType {
+	return MessageTypeOriginatingTransactionID
+}
+
+func (o OriginatingTransactionID) ToBytes() ([]byte, error) {
+	bytes := new(bytes.Buffer)
+
+	// TODO: implement the actual serialization logic
+	return bytes.Bytes(), nil
+}
+
 func NewOriginatingTransactionID(sourceEntityID uint, transactionSequenceNumber uint) OriginatingTransactionID {
 	return OriginatingTransactionID{
-		MessageImpl: MessageImpl{
-			Header:      NewHeader(),
-			MessageType: MessageTypeOriginatingTransactionID,
-		},
-		reserved:                       false,
 		lengthEntityID:                 0, // 1 octet
 		reservedTwo:                    false,
 		lenghTransactionSequenceNumber: 0, // 1 octet
@@ -126,28 +88,86 @@ func NewOriginatingTransactionID(sourceEntityID uint, transactionSequenceNumber 
 // ============= Directory Listing
 
 type DirectoryListingRequest struct {
-	MessageImpl
 	DirToList     string // local to the remote entity, the directory to list
 	PathToRespond string // full file path local to the caller, where the listing will be saved
 }
 
-func NewDirectoryListingRequest(dir string, file string) DirectoryListingRequest {
-	return DirectoryListingRequest{
-		DirToList:     dir,
-		PathToRespond: file,
-		MessageImpl: MessageImpl{
-			Header:      NewHeader(),
-			MessageType: MessageTypeDirectoryRequest,
-		},
+func (d *DirectoryListingRequest) GetMessageType() MessageType {
+	return MessageTypeDirectoryRequest
+}
+
+func (d *DirectoryListingRequest) ToBytes() ([]byte, error) {
+	bytes := new(bytes.Buffer)
+
+	bytes.WriteString("cfpd")
+	bytes.WriteByte(byte(d.GetMessageType()))
+
+	bytes.WriteByte(byte(len(d.DirToList)))
+	bytes.WriteString(d.DirToList)
+
+	bytes.WriteByte(byte(len(d.PathToRespond)))
+	bytes.WriteString(d.PathToRespond)
+
+	return bytes.Bytes(), nil
+}
+
+func (d *DirectoryListingRequest) FromBytes(data []byte) error {
+	buf := bytes.NewReader(data)
+
+	var magic [4]byte
+	if _, err := buf.Read(magic[:]); err != nil {
+		return fmt.Errorf("failed to read magic: %v", err)
 	}
+
+	var messageType MessageType
+	if err := binary.Read(buf, binary.LittleEndian, &messageType); err != nil {
+		return fmt.Errorf("failed to read message type: %v", err)
+	}
+
+	if messageType != MessageTypeDirectoryRequest {
+		return fmt.Errorf("invalid message type: %d", messageType)
+	}
+
+	var dirToListLen byte
+	if err := binary.Read(buf, binary.LittleEndian, &dirToListLen); err != nil {
+		return fmt.Errorf("failed to read directory length: %v", err)
+	}
+
+	dirToList := make([]byte, dirToListLen)
+	if _, err := buf.Read(dirToList); err != nil {
+		return fmt.Errorf("failed to read directory name: %v", err)
+	}
+	var pathToRespondLen byte
+	if err := binary.Read(buf, binary.LittleEndian, &pathToRespondLen); err != nil {
+		return fmt.Errorf("failed to read path length: %v", err)
+	}
+
+	pathToRespond := make([]byte, pathToRespondLen)
+	if _, err := buf.Read(pathToRespond); err != nil {
+		return fmt.Errorf("failed to read path name: %v", err)
+	}
+
+	d.DirToList = string(dirToList)
+	d.PathToRespond = string(pathToRespond)
+
+	return nil
 }
 
 type DirectoryListingResponse struct {
-	MessageImpl
 	ResponseCode  bool   // true if the directory listing was successful, false otherwise
 	Spare         uint8  // all zeros, 7 bits
 	DirToList     string // the directory that was listed, taken from the listing request
 	PathToRespond string // full file path local to the caller, taken from the listing request
+}
+
+func (d *DirectoryListingResponse) GetMessageType() MessageType {
+	return MessageTypeDirectoryResponse
+}
+
+func (d *DirectoryListingResponse) ToBytes() ([]byte, error) {
+	bytes := new(bytes.Buffer)
+	//TODO: implement the actual serialization logic
+	return bytes.Bytes(), nil
 }
 
 func NewDirectoryListingResponse(dirToList string, pathToRespond string) DirectoryListingResponse {
@@ -156,19 +176,10 @@ func NewDirectoryListingResponse(dirToList string, pathToRespond string) Directo
 		Spare:         0,
 		DirToList:     dirToList,
 		PathToRespond: pathToRespond,
-		MessageImpl: MessageImpl{
-			Header:      NewHeader(),
-			MessageType: MessageTypeDirectoryResponse,
-		},
 	}
 }
 
 // ============= Protocol Data Units
-
-type ProtocolDataUnit interface {
-	GetHeader() ProtocolDataUnitHeader
-}
-
 type PduType byte
 
 const (
@@ -376,10 +387,6 @@ func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
 	return nil
 }
 
-func (pdu FileDirectivePDU) GetHeader() ProtocolDataUnitHeader {
-	return pdu.Header
-}
-
 // ============= File Data PDUs
 type DirectiveCode uint8
 
@@ -463,10 +470,10 @@ type MetadataPDUContents struct {
 	FileSize            uint64 // If Large File flag is zero, the size of FSS data is 32 bits, else it is 64 bits.
 	SourceFileName      string
 	DestinationFileName string
-	Options             []TLVFormat
+	MessagesToUser      []Message
 }
 
-func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) []byte {
+func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) ([]byte, error) {
 	// reserved bits left as 0
 	bytes := new(bytes.Buffer)
 
@@ -494,10 +501,18 @@ func (m MetadataPDUContents) ToBytes(h ProtocolDataUnitHeader) []byte {
 	bytes.WriteByte(byte(len(m.DestinationFileName)))
 	bytes.WriteString(m.DestinationFileName)
 
-	for _, option := range m.Options {
-		bytes.Write(option.ToBytes())
+	for _, option := range m.MessagesToUser {
+		s, err := option.ToBytes()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize DirectoryListingRequest: %w", err)
+		}
+		tlv := TLVFormat{
+			Type:  MessagesToUser,
+			Value: s,
+		}
+		bytes.Write(tlv.ToBytes())
 	}
-	return bytes.Bytes()
+	return bytes.Bytes(), nil
 }
 
 func (m *MetadataPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) error {
@@ -557,7 +572,18 @@ func (m *MetadataPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) e
 		if err != nil {
 			return err
 		}
-		m.Options = append(m.Options, tlv)
+		switch tlv.Type {
+		case MessagesToUser:
+			r := DirectoryListingRequest{}
+			err := r.FromBytes(tlv.Value)
+			if err != nil {
+				return fmt.Errorf("failed to deserialize MessagesToUser: %v", err)
+			}
+			m.MessagesToUser = append(m.MessagesToUser, &r)
+
+		default:
+			return fmt.Errorf("unknown TLV type: %d", tlv.Type)
+		}
 	}
 
 	return nil
@@ -594,15 +620,14 @@ func TLVTypeFromString(b byte) (TLVType, error) {
 }
 
 type TLVFormat struct {
-	Type   TLVType
-	Length byte
-	Value  []byte
+	Type  TLVType
+	Value []byte
 }
 
 func (t TLVFormat) ToBytes() []byte {
 	bytes := new(bytes.Buffer)
 	bytes.WriteByte(byte(t.Type))
-	bytes.WriteByte(t.Length)
+	bytes.WriteByte(byte(len(t.Value)))
 	bytes.Write(t.Value)
 	return bytes.Bytes()
 }
@@ -617,17 +642,16 @@ func (t *TLVFormat) FromBytes(data *bytes.Reader) error {
 		return fmt.Errorf("failed to parse TLV type: %v", err)
 	}
 
-	b, err = data.ReadByte()
+	length, err := data.ReadByte()
 	if err != nil {
 		return fmt.Errorf("failed to read TLV length: %v", err)
 	}
-	t.Length = b
 
-	if data.Len() < int(t.Length) {
-		return fmt.Errorf("data too short for TLV value")
+	if data.Len() < int(length)-1 {
+		return fmt.Errorf("data too short for TLV value, expected %d bytes, got %d", length, data.Len())
 	}
 	// Read the value
-	t.Value = make([]byte, t.Length)
+	t.Value = make([]byte, length)
 	if _, err := data.Read(t.Value); err != nil {
 		return fmt.Errorf("failed to read TLV value: %v", err)
 	}

@@ -59,35 +59,42 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 	for _, msg := range p.MessagesToUser {
 		switch msg.GetMessageType() {
 		case messages.MessageTypeDirectoryRequest:
-			listingRequest := msg.(messages.DirectoryListingRequest)
+			listingRequest := msg.(*messages.DirectoryListingRequest)
 			slog.Info("Sending Directory Request", "dir", listingRequest.DirToList, "file", listingRequest.PathToRespond, "from", c.ID, "dst", dstID)
 
 			// Create a FileDirective PDU to send metadata about the directory listing
 			// TODO: assign sequence number and transaction ID properly
 			pduHeader := messages.NewPDUHeader(false, c.ID, dstID, 12345, messages.FileDirective)
+
 			pduContents := messages.MetadataPDUContents{
 				ClosureRequested:    p.ClosureRequested,
 				ChecksumType:        0xff, // Mock checksum for simplicity
 				FileSize:            0,
 				SourceFileName:      listingRequest.DirToList,
 				DestinationFileName: listingRequest.PathToRespond,
+				MessagesToUser:      []messages.Message{listingRequest},
+			}
+			d, err := pduContents.ToBytes(pduHeader)
+			if err != nil {
+				fmt.Println("Error converting MetadataPDUContents to bytes:", err)
+				return err
 			}
 			pdu := messages.FileDirectivePDU{
 				Header:  pduHeader,
 				DirCode: messages.MetadataPDU,
-				Data:    pduContents.ToBytes(pduHeader),
+				Data:    d,
 			}
 			if err := c.service.RequestBytes(pdu.ToBytes(int16(len(pdu.Data))), dstID); err != nil {
 				fmt.Println("Error sending PDU:", err)
 			}
-		case messages.MessageTypeDirectoryResponse:
-			listingResponse := msg.(messages.DirectoryListingResponse)
-			slog.Info("Handling Directory Response", "dir", listingResponse.DirToList, "file", listingResponse.PathToRespond, "entityID", c.ID)
-			return nil
-		case messages.MessageTypeOriginatingTransactionID:
-			originatingTransactionID := msg.(messages.OriginatingTransactionID)
-			fmt.Println(c.ID, "Handling Originating Transaction ID:", originatingTransactionID.SourceEntityID, originatingTransactionID.TransactionSequenceNumber)
-			return nil
+		// case messages.MessageTypeDirectoryResponse:
+		// 	listingResponse := msg.(*messages.DirectoryListingResponse)
+		// 	slog.Info("Handling Directory Response", "dir", listingResponse.DirToList, "file", listingResponse.PathToRespond, "entityID", c.ID)
+		// 	return nil
+		// case messages.MessageTypeOriginatingTransactionID:
+		// 	originatingTransactionID := msg.(*messages.OriginatingTransactionID)
+		// 	fmt.Println(c.ID, "Handling Originating Transaction ID:", originatingTransactionID.SourceEntityID, originatingTransactionID.TransactionSequenceNumber)
+		// 	return nil
 		default:
 			fmt.Println(c.ID, "Unknown request primitive: ", msg.GetMessageType())
 			return fmt.Errorf("unknown request primitive: %s", msg.GetMessageType())

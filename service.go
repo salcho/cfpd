@@ -54,6 +54,8 @@ func (s *CFPDService) ProcessMessage(bytes []byte) error {
 		if err != nil {
 			return fmt.Errorf("failed to decode metadata: %v", err)
 		}
+
+		fmt.Printf("Metadata PDU Contents: %#v", metadata)
 	}
 
 	return nil
@@ -116,7 +118,11 @@ func (s *CFPDService) Listen() {
 			s.isListening = false
 			break
 		}
-		s.ProcessMessage(buf)
+		err = s.ProcessMessage(buf)
+		if err != nil {
+			fmt.Println("Error processing message:", err)
+			continue
+		}
 	}
 
 	s.isListening = false

@@ -33,7 +33,10 @@ func (app *cfpdApp) ListDirectory(dstEntityID uint16, localPath, remotePath stri
 		TransmissionMode:      messages.Unacknowledged,
 		ClosureRequested:      true,
 		MessagesToUser: []messages.Message{
-			messages.NewDirectoryListingRequest(localPath, remotePath),
+			&messages.DirectoryListingRequest{
+				DirToList:     remotePath,
+				PathToRespond: localPath,
+			},
 		},
 		FilestoreRequests: []string{},
 	})
