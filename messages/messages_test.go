@@ -523,3 +523,78 @@ func TestFileDataPDU_ToBytesAndFromBytes(t *testing.T) {
 		}
 	})
 }
+
+func TestEOFPDUData_ToBytesAndFromBytes(t *testing.T) {
+	t.Run("NoError_SmallFile", func(t *testing.T) {
+		header := NewPDUHeader(false, 1, 2, 123, FileDirective) // LargeFileFlag = false
+		original := EOFPDUContents{
+			ConditionCode: NoError,
+			FileChecksum:  0xBEEF,
+			FileSize:      1024,
+		}
+
+		data, err := original.ToBytes(header)
+		if err != nil {
+			t.Fatalf("ToBytes() failed: %v", err)
+		}
+
+		// Expected: 1 (CondCode) + 1 (Spare) + 4 (Checksum) + 4 (FileSize) = 10 bytes
+		if len(data) != 10 {
+			t.Fatalf("Expected data length to be 10, got %d", len(data))
+		}
+
+		var decoded EOFPDUContents
+		if err := decoded.FromBytes(data, header); err != nil {
+			t.Fatalf("FromBytes() failed: %v", err)
+		}
+
+		if decoded.ConditionCode != original.ConditionCode {
+			t.Errorf("ConditionCode mismatch: got %v, want %v", decoded.ConditionCode, original.ConditionCode)
+		}
+		if decoded.FileChecksum != original.FileChecksum {
+			t.Errorf("FileChecksum mismatch: got %X, want %X", decoded.FileChecksum, original.FileChecksum)
+		}
+		if decoded.FileSize != original.FileSize {
+			t.Errorf("FileSize mismatch: got %d, want %d", decoded.FileSize, original.FileSize)
+		}
+	})
+
+	t.Run("WithError_LargeFile_HardcodedFaultLocation", func(t *testing.T) {
+		header := NewPDUHeader(true, 1, 2, 123, FileDirective) // LargeFileFlag = true
+		original := EOFPDUContents{
+			ConditionCode: FileChecksumFailure,
+			FileChecksum:  0xCAFE,
+			FileSize:      0x123456789ABCDEF0,
+			FaultLocation: 99, // This value is not used in serialization, it's hardcoded to 123
+		}
+
+		data, err := original.ToBytes(header)
+		if err != nil {
+			t.Fatalf("ToBytes() failed: %v", err)
+		}
+
+		// Expected: 1 (CondCode) + 1 (Spare) + 4 (Checksum) + 8 (FileSize) + 3 (TLV) = 17 bytes
+		if len(data) != 17 {
+			t.Fatalf("Expected data length to be 17, got %d", len(data))
+		}
+
+		var decoded EOFPDUContents
+		if err := decoded.FromBytes(data, header); err != nil {
+			t.Fatalf("FromBytes() failed: %v", err)
+		}
+
+		if decoded.ConditionCode != original.ConditionCode {
+			t.Errorf("ConditionCode mismatch: got %v, want %v", decoded.ConditionCode, original.ConditionCode)
+		}
+		if decoded.FileChecksum != original.FileChecksum {
+			t.Errorf("FileChecksum mismatch: got %X, want %X", decoded.FileChecksum, original.FileChecksum)
+		}
+		if decoded.FileSize != original.FileSize {
+			t.Errorf("FileSize mismatch: got %X, want %X", decoded.FileSize, original.FileSize)
+		}
+		// Test that the hardcoded fault location is deserialized correctly
+		if decoded.FaultLocation != 123 {
+			t.Errorf("FaultLocation mismatch: got %d, want %d", decoded.FaultLocation, 123)
+		}
+	})
+}

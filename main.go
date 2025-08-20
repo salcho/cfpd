@@ -105,8 +105,7 @@ func main() {
 			1: "127.0.0.1:11234",
 		},
 	}
-	cEntity := NewEntity(0, "Client", clientConf)
-	app := CFDPApp{Entity: &cEntity}
+	app := NewCFDPApp(0, "Client", clientConf)
 	app.ListDirectory(1, "/tmp/foo.txt", "/remote")
 
 	// listingRequest := RequestPrimitive{

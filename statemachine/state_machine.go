@@ -13,9 +13,12 @@ type State byte
 
 const (
 	StateIdle State = iota
-	WaitingForDirectoryListing
-	SendingDirectoryListing
+	WaitingForDirectoryListingMetadata
+	SendingDirectoryListingMetadata
+	UploadingDirectoryListing
+	SendingDirectoryListingEOF
 	WaitingForFileData
+	ReceivedDirectoryListing
 	StateSending
 	StateReceiving
 	StateError

@@ -14,6 +14,7 @@ type CFDPEntity struct {
 	service *CFPDService
 	fs      filesystem.FS
 	sm      *statemachine.StateMachine
+	ic      IndicationCallback
 }
 
 func (c CFDPEntity) GetID() uint16 {
@@ -67,7 +68,7 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 			slog.Debug("Sending Directory Request", "remote", listingRequest.DirToList, "local", listingRequest.PathToRespond, "from", c.ID, "dst", dstID)
 
 			// TODO: assign sequence number and transaction ID properly
-			pdu, err := messages.NewMetadataPDU(false, c.ID, dstID, 12345, messages.FileDirective, p.ClosureRequested,
+			pdu, err := messages.NewMetadataPDU(false, c.ID, dstID, 12345, p.ClosureRequested,
 				listingRequest.PathToRespond, listingRequest.DirToList, []messages.Message{listingRequest})
 			if err != nil {
 				fmt.Println("Error creating File Directive PDU:", err)
@@ -76,7 +77,7 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 			if err := c.service.RequestBytes(pdu.ToBytes(), dstID); err != nil {
 				fmt.Println("Error sending PDU:", err)
 			}
-			c.sm.SetState(statemachine.WaitingForDirectoryListing)
+			c.sm.SetState(statemachine.WaitingForDirectoryListingMetadata)
 		default:
 			fmt.Println(c.ID, "Unknown request primitive: ", msg.GetMessageType())
 			return fmt.Errorf("unknown request primitive: %s", msg.GetMessageType())
@@ -98,13 +99,31 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 			}
 
 			if hasUploadRequest(metadata.MessagesToUser) {
-				c.sm.SetState(statemachine.SendingDirectoryListing)
-				slog.Debug("Handling Directory Listing Request", "entityID", c.ID, "remotePath", metadata.SourceFileName, "localPath", metadata.DestinationFileName)
 				return c.UploadDirectoryListing(pdu, metadata)
 			}
 
+			// TODO: 4.6.1.2.6 pass any errors to the indication callback
+			c.ic(MetadataRecv)
 			c.sm.SetState(statemachine.WaitingForFileData)
 			c.sm.Context.FilePath = metadata.DestinationFileName
+			return nil
+		case messages.EOFPDU:
+			slog.Debug("Handling EOF PDU", "entityID", c.ID)
+			eofContents := messages.EOFPDUContents{}
+			err := eofContents.FromBytes(pdu.Data, pdu.Header)
+			if err != nil {
+				return fmt.Errorf("failed to decode EOF contents: %v", err)
+			}
+
+			if eofContents.ConditionCode != messages.NoError {
+				return fmt.Errorf("EOF PDU with error condition: %v", eofContents.ConditionCode)
+			}
+
+			if c.sm.CurrentState != statemachine.WaitingForFileData {
+				return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.CurrentState)
+			}
+
+			c.sm.SetState(statemachine.ReceivedDirectoryListing)
 			return nil
 
 		default:
@@ -114,6 +133,7 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 
 	if pdu.GetType() == messages.FileData {
 		pdu := pdu.(*messages.FileDataPDU)
+		// TODO: implement segment metadata handling & file chunking
 		slog.Debug("Handling File Data PDU", "entityID", c.ID, "dataLength", len(pdu.FileData))
 		if c.sm.CurrentState != statemachine.WaitingForFileData {
 			return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.CurrentState)
@@ -141,20 +161,14 @@ func hasUploadRequest(m []messages.Message) bool {
 
 func (c CFDPEntity) UploadDirectoryListing(pdu *messages.FileDirectivePDU, m messages.MetadataPDUContents) error {
 	slog.Info("Uploading directory listing", "local", m.DestinationFileName, "uploadTo", m.SourceFileName, "from", c.ID, "to", pdu.Header.SourceEntityID)
+	dstEntityID := pdu.Header.SourceEntityID
+	srcFileName := m.DestinationFileName
+	dstFileName := m.SourceFileName
 
-	l, err := c.fs.ListDirectory(m.DestinationFileName)
-	if err != nil {
-		return fmt.Errorf("failed to list directory: %v", err)
-	}
-
-	return c.CopyOperation(pdu.Header.SourceEntityID, m.DestinationFileName, m.SourceFileName, l)
-}
-
-func (c CFDPEntity) CopyOperation(dstEntityID uint16, srcFileName, dstFileName string, contents string) error {
-	slog.Debug("Copying file", "from", srcFileName, "to", dstFileName, "dstEntityID", dstEntityID, "entityID", c.ID)
-
-	pdu, err := messages.NewMetadataPDU(false, c.ID, dstEntityID, 12345, messages.FileDirective, true,
-		srcFileName, dstFileName, []messages.Message{
+	c.sm.SetState(statemachine.SendingDirectoryListingMetadata)
+	// send metadata PDU with directory listing
+	metadata, err := messages.NewMetadataPDU(false, c.ID, dstEntityID, 12345, true,
+		m.DestinationFileName, m.SourceFileName, []messages.Message{
 			&messages.DirectoryListingResponse{
 				WasSuccessful: true,
 				DirToList:     dstFileName,
@@ -165,15 +179,19 @@ func (c CFDPEntity) CopyOperation(dstEntityID uint16, srcFileName, dstFileName s
 		fmt.Println("Error creating File Directive PDU:", err)
 		return nil
 	}
-
-	if err := c.service.RequestBytes(pdu.ToBytes(), dstEntityID); err != nil {
+	if err := c.service.RequestBytes(metadata.ToBytes(), dstEntityID); err != nil {
 		fmt.Println("Error sending PDU:", err)
 		return err
 	}
 
+	c.sm.SetState(statemachine.UploadingDirectoryListing)
+	l, err := c.fs.ListDirectory(m.DestinationFileName)
+	if err != nil {
+		return fmt.Errorf("failed to list directory: %v", err)
+	}
 	fdp := messages.FileDataPDU{
 		Header:   messages.NewPDUHeader(false, c.ID, dstEntityID, 12345, messages.FileData),
-		FileData: []byte(contents),
+		FileData: []byte(l),
 		Offset:   0,
 	}
 
@@ -182,11 +200,39 @@ func (c CFDPEntity) CopyOperation(dstEntityID uint16, srcFileName, dstFileName s
 		return err
 	}
 
-	slog.Info("File data sent successfully", "fileName", dstFileName, "entityID", c.ID, "dstEntityID", dstEntityID)
+	c.sm.SetState(statemachine.SendingDirectoryListingEOF)
+	eof, err := messages.NewEOFPDU(false, c.ID, dstEntityID, 12345, messages.NoError)
+	if err != nil {
+		fmt.Println("Error creating EOF PDU:", err)
+		return err
+	}
+	if err := c.service.RequestBytes(eof.ToBytes(), dstEntityID); err != nil {
+		fmt.Println("Error sending File Data PDU:", err)
+		return err
+	}
+
 	return nil
 }
 
-func NewEntity(id uint16, name string, sc ServiceConfig) CFDPEntity {
+type Indication byte
+
+const (
+	Transaction Indication = iota
+	EOFSent
+	TransactionFinished
+	MetadataRecv
+	FileSegmentRecv
+	Report
+	Suspended
+	Resumed
+	Fault
+	Abandoned
+	EOFRecv
+)
+
+type IndicationCallback func(i Indication)
+
+func NewEntity(id uint16, name string, sc ServiceConfig) *CFDPEntity {
 	service := &CFPDService{Config: sc}
 	entity := CFDPEntity{
 		ID:      id,
@@ -194,7 +240,12 @@ func NewEntity(id uint16, name string, sc ServiceConfig) CFDPEntity {
 		service: service,
 		fs:      &filesystem.LocalFS{},
 		sm:      statemachine.NewStateMachine(),
+		ic:      nil, // no callback set by default
 	}
 	service.Bind(&entity)
-	return entity
+	return &entity
+}
+
+func (c *CFDPEntity) SetIndicationCallback(ic IndicationCallback) {
+	c.ic = ic
 }

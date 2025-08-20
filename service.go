@@ -50,6 +50,21 @@ func (s *CFPDService) ProcessMessage(bytes []byte) (messages.PDU, error) {
 
 			return &fdp, nil
 
+		case messages.EOFPDU:
+			slog.Debug("Received EOF PDU", "entityID", s.Config.entityID)
+
+			eofContents := messages.EOFPDUContents{}
+			err = eofContents.FromBytes(fdp.Data, fdp.Header)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode EOF contents: %v", err)
+			}
+
+			if eofContents.ConditionCode != messages.NoError {
+				return nil, fmt.Errorf("EOF PDU with error condition: %v", eofContents.ConditionCode)
+			}
+
+			return &fdp, nil
+
 		default:
 			return nil, fmt.Errorf("unknown directive code: %v", fdp.DirCode)
 		}

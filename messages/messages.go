@@ -575,8 +575,8 @@ func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
 	return nil
 }
 
-func NewMetadataPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, pduType PduType, closureRequested bool, srcFileName, dstFileName string, msgs []Message) (*FileDirectivePDU, error) {
-	pduHeader := NewPDUHeader(largeFileFlag, srcEntityID, dstEntityID, transactionID, pduType)
+func NewMetadataPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, closureRequested bool, srcFileName, dstFileName string, msgs []Message) (*FileDirectivePDU, error) {
+	pduHeader := NewPDUHeader(largeFileFlag, srcEntityID, dstEntityID, transactionID, FileDirective)
 
 	pduContents := MetadataPDUContents{
 		ClosureRequested:    closureRequested,
@@ -612,7 +612,7 @@ const (
 	KeepAlivePDU DirectiveCode = 0xC
 )
 
-type ConditionCode uint8
+type ConditionCode byte
 
 // 0b1100 - 0b1101 are reserved for future use
 const (
@@ -645,34 +645,118 @@ const (
 	Abandon
 )
 
-type EOFPDUData struct {
-	conditionCode ConditionCode
-	fileChecksum  int32
-	fileSize      uint64 // takes 64 bits for files with largeFileFlag set, 32 bits otherwise
-	faultLocation uint   // omitted if condition code is 'No error', else it's the ID of the entity at which transaction cancellation was initiated.
+type EOFPDUContents struct {
+	ConditionCode ConditionCode
+	FileChecksum  int32
+	FileSize      uint64 // takes 64 bits for files with largeFileFlag set, 32 bits otherwise
+	FaultLocation uint   // omitted if condition code is 'No error', else it's the ID of the entity at which transaction cancellation was initiated.
 }
 
-func NewEOFPDUData(conditionCode ConditionCode, fileChecksum int32, fileSize uint64, faultLocation uint) EOFPDUData {
-	return EOFPDUData{
-		conditionCode: conditionCode,
-		fileChecksum:  fileChecksum,
-		fileSize:      fileSize,
-		faultLocation: faultLocation,
+func NewEOFPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, cc ConditionCode) (*FileDirectivePDU, error) {
+	pduHeader := NewPDUHeader(largeFileFlag, srcEntityID, dstEntityID, transactionID, FileDirective)
+
+	// TODO: implement proper EOFPDUContents initialization
+	// For now, we will use a mock EOFPDUContents with no error and zero values
+	// This should be replaced with actual values based on the file transfer status
+	pduContents := EOFPDUContents{
+		ConditionCode: NoError,
+		FileChecksum:  0,
+		FileSize:      0,
+		FaultLocation: 0,
 	}
-}
-
-func (e EOFPDUData) GetDirectiveCode() DirectiveCode {
-	return EOFPDU
-}
-
-func (e EOFPDUData) GetDirectiveParameter() []byte {
-	return []byte{
-		byte(e.conditionCode),
-		0b0000, // spare, 4 bits, always 0
-		byte(0b11111111 & e.fileChecksum >> 24),
-		byte(e.fileSize),
-		byte(e.faultLocation),
+	d, err := pduContents.ToBytes(pduHeader)
+	if err != nil {
+		fmt.Println("Error converting MetadataPDUContents to bytes:", err)
+		return nil, err
 	}
+	return &FileDirectivePDU{
+		Header:  pduHeader,
+		DirCode: EOFPDU,
+		Data:    d,
+	}, nil
+}
+
+func (e EOFPDUContents) ToBytes(h ProtocolDataUnitHeader) ([]byte, error) {
+	bytes := new(buf.Buffer)
+
+	bytes.WriteByte(byte(e.ConditionCode))
+	bytes.WriteByte(0b0000) // spare, 4 bits, always 0
+	if err := binary.Write(bytes, binary.BigEndian, uint32(e.FileChecksum)); err != nil {
+		return nil, fmt.Errorf("failed to write fileChecksum: %v", err)
+	}
+
+	if h.LargeFileFlag {
+		if err := binary.Write(bytes, binary.BigEndian, e.FileSize); err != nil {
+			return nil, fmt.Errorf("failed to write fileSize: %v", err)
+		}
+	} else {
+		if err := binary.Write(bytes, binary.BigEndian, uint32(e.FileSize)); err != nil {
+			return nil, fmt.Errorf("failed to write fileSize: %v", err)
+		}
+	}
+
+	if e.ConditionCode.IsError() {
+		// entity ID in the TLV is the ID of the entity at which transaction cancellation was initiated.
+		tlv := TLVFormat{
+			Type: EntityID,
+			// TODO: implement proper faultLocation handling
+			Value: []byte{123},
+		}
+		bytes.Write(tlv.ToBytes())
+	}
+
+	return bytes.Bytes(), nil
+}
+
+func (e *EOFPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) error {
+	buf := buf.NewReader(data)
+
+	// Read ConditionCode
+	var conditionCode byte
+	if err := binary.Read(buf, binary.BigEndian, &conditionCode); err != nil {
+		return fmt.Errorf("failed to read condition code: %v", err)
+	}
+	e.ConditionCode = ConditionCode(conditionCode)
+
+	// Read spare bits (4 bits, always 0)
+	var spare byte
+	if err := binary.Read(buf, binary.BigEndian, &spare); err != nil {
+		return fmt.Errorf("failed to read spare bits: %v", err)
+	}
+
+	// Read FileChecksum
+	if err := binary.Read(buf, binary.BigEndian, &e.FileChecksum); err != nil {
+		return fmt.Errorf("failed to read file checksum: %v", err)
+	}
+
+	// Read FileSize
+	if h.LargeFileFlag {
+		if err := binary.Read(buf, binary.BigEndian, &e.FileSize); err != nil {
+			return fmt.Errorf("failed to read file size: %v", err)
+		}
+	} else {
+		var fs32 uint32
+		if err := binary.Read(buf, binary.BigEndian, &fs32); err != nil {
+			return fmt.Errorf("failed to read file size: %v", err)
+		}
+		e.FileSize = uint64(fs32)
+	}
+
+	if e.ConditionCode.IsError() {
+		tlv := TLVFormat{}
+		if err := tlv.FromBytes(buf); err != nil {
+			return fmt.Errorf("failed to read TLV: %v", err)
+		}
+		if tlv.Type != EntityID {
+			return fmt.Errorf("expected TLV type EntityID, got %d", tlv.Type)
+		}
+		if len(tlv.Value) != 1 {
+			return fmt.Errorf("expected 1 byte for fault location, got %d bytes", len(tlv.Value))
+		}
+		e.FaultLocation = uint(tlv.Value[0]) // assuming the fault location is a single byte
+	}
+
+	return nil
 }
 
 type MetadataPDUContents struct {
