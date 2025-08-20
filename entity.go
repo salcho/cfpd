@@ -1,19 +1,19 @@
 package main
 
 import (
+	filesystem "cfdp/filesystem"
+	"cfdp/messages"
+	"cfdp/statemachine"
 	"fmt"
 	"log/slog"
-	filesystem "main/filesystem"
-	"main/messages"
-	"main/statemachine"
 )
 
 type CFDPEntity struct {
 	ID      uint16
 	Name    string
-	service *CFPDService
+	service Service
 	fs      filesystem.FS
-	sm      *statemachine.StateMachine
+	sm      statemachine.StateMachineI
 	ic      IndicationCallback
 }
 
@@ -105,8 +105,8 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 			// TODO: 4.6.1.2.6 pass any errors to the indication callback
 			c.ic(MetadataRecv)
 			c.sm.SetState(statemachine.WaitingForFileData)
-			c.sm.Context.FilePath = metadata.DestinationFileName
-			c.sm.Context.ChecksumType = messages.ChecksumType(metadata.ChecksumType)
+			c.sm.GetContext().FilePath = metadata.DestinationFileName
+			c.sm.GetContext().ChecksumType = messages.ChecksumType(metadata.ChecksumType)
 			return nil
 		case messages.EOFPDU:
 			slog.Debug("Handling EOF PDU", "entityID", c.ID)
@@ -120,20 +120,20 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 				return fmt.Errorf("EOF PDU with error condition: %v", eofContents.ConditionCode)
 			}
 
-			if c.sm.CurrentState != statemachine.WaitingForFileData {
-				return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.CurrentState)
+			if c.sm.GetState() != statemachine.WaitingForFileData {
+				return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.GetState())
 			}
 
-			var checksum = messages.GetChecksumAlgorithm(c.sm.Context.ChecksumType)(c.sm.Context.FileData)
+			var checksum = messages.GetChecksumAlgorithm(c.sm.GetContext().ChecksumType)(c.sm.GetContext().FileData)
 			if eofContents.FileChecksum != checksum {
 				return fmt.Errorf("checksum mismatch: expected %d, got %d", eofContents.FileChecksum, checksum)
 			}
 
-			err = c.fs.WriteFile(c.sm.Context.FilePath, c.sm.Context.FileData)
+			err = c.fs.WriteFile(c.sm.GetContext().FilePath, c.sm.GetContext().FileData)
 			if err != nil {
 				return fmt.Errorf("failed to write file data: %v", err)
 			}
-			slog.Info("File data written successfully", "fileName", c.sm.Context.FilePath, "entityID", c.ID)
+			slog.Info("File data written successfully", "fileName", c.sm.GetContext().FilePath, "entityID", c.ID)
 			c.sm.SetState(statemachine.ReceivedDirectoryListing)
 			return nil
 
@@ -146,11 +146,11 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 		pdu := pdu.(*messages.FileDataPDU)
 		// TODO: implement segment metadata handling & file chunking
 		slog.Info("Handling File Data PDU", "entityID", c.ID, "dataLength", len(pdu.FileData))
-		if c.sm.CurrentState != statemachine.WaitingForFileData {
-			return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.CurrentState)
+		if c.sm.GetState() != statemachine.WaitingForFileData {
+			return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.GetState())
 		}
 
-		c.sm.Context.FileData = pdu.FileData
+		c.sm.GetContext().FileData = pdu.FileData
 		return nil
 	}
 

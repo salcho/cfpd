@@ -2,7 +2,7 @@ package main
 
 import (
 	"log/slog"
-	"main/messages"
+	"cfdp/messages"
 )
 
 type CFDPApp struct {

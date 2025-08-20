@@ -31,6 +31,10 @@ type ProtocolDataUnitHeader struct {
 	destinationEntityID            uint16 // identifies the final destination of the transaction’s metadata and file data
 }
 
+func (h *ProtocolDataUnitHeader) GetDestinationEntityID() uint16 {
+	return h.destinationEntityID
+}
+
 func (h ProtocolDataUnitHeader) ToBytes(dataFieldLength int16) ([]byte, error) {
 	if dataFieldLength < 0 {
 		return nil, fmt.Errorf("data field length must be non-negative")

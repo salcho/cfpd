@@ -1,12 +1,21 @@
 package main
 
 import (
+	"cfdp/messages"
 	"fmt"
 	"log/slog"
-	"main/messages"
 	"net"
 )
 
+// Service is an interface for the CFDP service.
+type Service interface {
+	RequestBytes(p []byte, dEntityID uint16) error
+	Bind(e *CFDPEntity) error
+	Listen(e *CFDPEntity)
+	ProcessMessage(bytes []byte) (messages.PDU, error)
+}
+
+// ServiceConfig holds the configuration for a CFDP service.
 type ServiceConfig struct {
 	entityID     uint16
 	address      string
