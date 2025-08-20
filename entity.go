@@ -69,7 +69,7 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 
 			// TODO: assign sequence number and transaction ID properly
 			pdu, err := messages.NewMetadataPDU(false, c.ID, dstID, 12345, p.ClosureRequested,
-				listingRequest.PathToRespond, listingRequest.DirToList, []messages.Message{listingRequest})
+				listingRequest.PathToRespond, listingRequest.DirToList, 0, messages.CRC32, []messages.Message{listingRequest})
 			if err != nil {
 				fmt.Println("Error creating File Directive PDU:", err)
 				return err
@@ -106,6 +106,7 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 			c.ic(MetadataRecv)
 			c.sm.SetState(statemachine.WaitingForFileData)
 			c.sm.Context.FilePath = metadata.DestinationFileName
+			c.sm.Context.ChecksumType = messages.ChecksumType(metadata.ChecksumType)
 			return nil
 		case messages.EOFPDU:
 			slog.Debug("Handling EOF PDU", "entityID", c.ID)
@@ -123,6 +124,16 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 				return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.CurrentState)
 			}
 
+			var checksum = messages.GetChecksumAlgorithm(c.sm.Context.ChecksumType)(c.sm.Context.FileData)
+			if eofContents.FileChecksum != checksum {
+				return fmt.Errorf("checksum mismatch: expected %d, got %d", eofContents.FileChecksum, checksum)
+			}
+
+			err = c.fs.WriteFile(c.sm.Context.FilePath, c.sm.Context.FileData)
+			if err != nil {
+				return fmt.Errorf("failed to write file data: %v", err)
+			}
+			slog.Info("File data written successfully", "fileName", c.sm.Context.FilePath, "entityID", c.ID)
 			c.sm.SetState(statemachine.ReceivedDirectoryListing)
 			return nil
 
@@ -134,16 +145,12 @@ func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
 	if pdu.GetType() == messages.FileData {
 		pdu := pdu.(*messages.FileDataPDU)
 		// TODO: implement segment metadata handling & file chunking
-		slog.Debug("Handling File Data PDU", "entityID", c.ID, "dataLength", len(pdu.FileData))
+		slog.Info("Handling File Data PDU", "entityID", c.ID, "dataLength", len(pdu.FileData))
 		if c.sm.CurrentState != statemachine.WaitingForFileData {
 			return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.CurrentState)
 		}
 
-		err := c.fs.WriteFile(c.sm.Context.FilePath, pdu.FileData)
-		if err != nil {
-			return fmt.Errorf("failed to write file data: %v", err)
-		}
-		slog.Info("File data written successfully", "fileName", c.sm.Context.FilePath, "entityID", c.ID)
+		c.sm.Context.FileData = pdu.FileData
 		return nil
 	}
 
@@ -165,10 +172,16 @@ func (c CFDPEntity) UploadDirectoryListing(pdu *messages.FileDirectivePDU, m mes
 	srcFileName := m.DestinationFileName
 	dstFileName := m.SourceFileName
 
+	l, err := c.fs.ListDirectory(m.DestinationFileName)
+	if err != nil {
+		// TODO: handle error properly
+		return fmt.Errorf("failed to list directory: %v", err)
+	}
+	// 4.6.1.1.2 the sender shall forward a Metadata PDU
 	c.sm.SetState(statemachine.SendingDirectoryListingMetadata)
-	// send metadata PDU with directory listing
+	var checksumAlgorithm messages.ChecksumType = messages.CRC32
 	metadata, err := messages.NewMetadataPDU(false, c.ID, dstEntityID, 12345, true,
-		m.DestinationFileName, m.SourceFileName, []messages.Message{
+		srcFileName, dstFileName, uint64(len(l)), checksumAlgorithm, []messages.Message{
 			&messages.DirectoryListingResponse{
 				WasSuccessful: true,
 				DirToList:     dstFileName,
@@ -185,10 +198,6 @@ func (c CFDPEntity) UploadDirectoryListing(pdu *messages.FileDirectivePDU, m mes
 	}
 
 	c.sm.SetState(statemachine.UploadingDirectoryListing)
-	l, err := c.fs.ListDirectory(m.DestinationFileName)
-	if err != nil {
-		return fmt.Errorf("failed to list directory: %v", err)
-	}
 	fdp := messages.FileDataPDU{
 		Header:   messages.NewPDUHeader(false, c.ID, dstEntityID, 12345, messages.FileData),
 		FileData: []byte(l),
@@ -201,7 +210,8 @@ func (c CFDPEntity) UploadDirectoryListing(pdu *messages.FileDirectivePDU, m mes
 	}
 
 	c.sm.SetState(statemachine.SendingDirectoryListingEOF)
-	eof, err := messages.NewEOFPDU(false, c.ID, dstEntityID, 12345, messages.NoError)
+	checksum := messages.GetChecksumAlgorithm(checksumAlgorithm)([]byte(l))
+	eof, err := messages.NewEOFPDU(false, c.ID, dstEntityID, 12345, messages.NoError, checksum)
 	if err != nil {
 		fmt.Println("Error creating EOF PDU:", err)
 		return err

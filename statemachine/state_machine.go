@@ -2,6 +2,7 @@ package statemachine
 
 import (
 	"fmt"
+	"main/messages"
 )
 
 type StateMachine struct {
@@ -25,7 +26,9 @@ const (
 )
 
 type Context struct {
-	FilePath string
+	FilePath     string
+	ChecksumType messages.ChecksumType
+	FileData     []byte
 }
 
 func NewStateMachine() *StateMachine {

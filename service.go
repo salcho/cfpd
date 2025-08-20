@@ -77,7 +77,6 @@ func (s *CFPDService) ProcessMessage(bytes []byte) (messages.PDU, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode File Data PDU: %v", err)
 		}
-
 		return &fdp, nil
 	}
 
@@ -135,7 +134,8 @@ func (s *CFPDService) Listen(e *CFDPEntity) {
 	defer s.conn.Close()
 	for {
 		buf := make([]byte, 1024)
-		_, _, err := s.conn.ReadFromUDP(buf)
+		n, _, err := s.conn.ReadFromUDP(buf)
+		buf = buf[:n]
 		if err != nil {
 			fmt.Println("Error reading from UDP:", err)
 			s.isListening = false

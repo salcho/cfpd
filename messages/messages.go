@@ -411,7 +411,7 @@ func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, tr
 		PduType:                        pduType,
 		direction:                      false,
 		transmissionMode:               Unacknowledged,
-		crcFlag:                        false,
+		crcFlag:                        true,
 		LargeFileFlag:                  largeFileFlag,
 		pduDataFieldLength:             0, // TODO: set to actual length when data is added
 		segmentationControl:            false,
@@ -575,13 +575,14 @@ func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
 	return nil
 }
 
-func NewMetadataPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, closureRequested bool, srcFileName, dstFileName string, msgs []Message) (*FileDirectivePDU, error) {
+func NewMetadataPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, closureRequested bool, srcFileName, dstFileName string,
+	fileSize uint64, checksumType ChecksumType, msgs []Message) (*FileDirectivePDU, error) {
 	pduHeader := NewPDUHeader(largeFileFlag, srcEntityID, dstEntityID, transactionID, FileDirective)
 
 	pduContents := MetadataPDUContents{
 		ClosureRequested:    closureRequested,
-		ChecksumType:        0xff, // Mock checksum for simplicity
-		FileSize:            0,
+		ChecksumType:        byte(checksumType),
+		FileSize:            fileSize,
 		SourceFileName:      srcFileName,
 		DestinationFileName: dstFileName,
 		MessagesToUser:      msgs,
@@ -647,12 +648,12 @@ const (
 
 type EOFPDUContents struct {
 	ConditionCode ConditionCode
-	FileChecksum  int32
+	FileChecksum  uint32
 	FileSize      uint64 // takes 64 bits for files with largeFileFlag set, 32 bits otherwise
 	FaultLocation uint   // omitted if condition code is 'No error', else it's the ID of the entity at which transaction cancellation was initiated.
 }
 
-func NewEOFPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, cc ConditionCode) (*FileDirectivePDU, error) {
+func NewEOFPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, cc ConditionCode, fc uint32) (*FileDirectivePDU, error) {
 	pduHeader := NewPDUHeader(largeFileFlag, srcEntityID, dstEntityID, transactionID, FileDirective)
 
 	// TODO: implement proper EOFPDUContents initialization
@@ -660,7 +661,7 @@ func NewEOFPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionI
 	// This should be replaced with actual values based on the file transfer status
 	pduContents := EOFPDUContents{
 		ConditionCode: NoError,
-		FileChecksum:  0,
+		FileChecksum:  fc,
 		FileSize:      0,
 		FaultLocation: 0,
 	}
