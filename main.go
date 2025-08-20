@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"main/messages"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -71,9 +72,19 @@ func NewPutRequest(dst uint16, msgs ...messages.Message) RequestPrimitive {
 
 func main() {
 	lvl := new(slog.LevelVar)
-	lvl.Set(slog.LevelDebug)
+	lvl.Set(slog.LevelInfo)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: lvl,
+		Level:     lvl,
+		AddSource: true,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.LevelKey || a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			if a.Key == slog.SourceKey {
+				a.Value = slog.StringValue(filepath.Base(a.Value.String()))
+			}
+			return a
+		},
 	}))
 	slog.SetDefault(logger)
 
@@ -96,7 +107,7 @@ func main() {
 	}
 	cEntity := NewEntity(0, "Client", clientConf)
 	app := CFDPApp{Entity: &cEntity}
-	app.ListDirectory(1, "/path/to/local/dir", "/path/to/remote/dir")
+	app.ListDirectory(1, "/tmp/foo.txt", "/remote")
 
 	// listingRequest := RequestPrimitive{
 	// 	ReqType:          PutRequest,

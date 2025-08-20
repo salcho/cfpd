@@ -24,6 +24,22 @@ type Message interface {
 	FromBytes(data []byte) error
 }
 
+func DeserializeMessageType(data []byte) (MessageType, error) {
+	if len(data) < 4 {
+		return 0, fmt.Errorf("data too short to contain message type")
+	}
+	buf := buf.NewReader(data)
+	var magic [4]byte
+	if _, err := buf.Read(magic[:]); err != nil {
+		return 0, fmt.Errorf("failed to read magic: %v", err)
+	}
+	var messageType MessageType
+	if err := binary.Read(buf, binary.LittleEndian, &messageType); err != nil {
+		return 0, fmt.Errorf("failed to read message type: %v", err)
+	}
+	return messageType, nil
+}
+
 type MessageType byte
 
 const (
@@ -194,6 +210,9 @@ func (d *DirectoryListingResponse) GetMessageType() MessageType {
 func (d *DirectoryListingResponse) ToBytes() ([]byte, error) {
 	bytes := new(buf.Buffer)
 
+	bytes.WriteString("cfpd")
+	bytes.WriteByte(byte(d.GetMessageType()))
+
 	var flags byte
 	if d.WasSuccessful {
 		flags |= 0b10000000
@@ -213,6 +232,19 @@ func (d *DirectoryListingResponse) ToBytes() ([]byte, error) {
 
 func (d *DirectoryListingResponse) FromBytes(data []byte) error {
 	buf := buf.NewReader(data)
+
+	var magic [4]byte
+	if _, err := buf.Read(magic[:]); err != nil {
+		return fmt.Errorf("failed to read magic: %v", err)
+	}
+
+	var messageType MessageType
+	if err := binary.Read(buf, binary.LittleEndian, &messageType); err != nil {
+		return fmt.Errorf("failed to read message type: %v", err)
+	}
+	if messageType != MessageTypeDirectoryResponse {
+		return fmt.Errorf("invalid message type: %d", messageType)
+	}
 
 	var flags byte
 	if err := binary.Read(buf, binary.LittleEndian, &flags); err != nil {
@@ -392,16 +424,26 @@ func NewPDUHeader(largeFileFlag bool, srcEntityID uint16, dstEntityID uint16, tr
 	}
 }
 
+type PDU interface {
+	ToBytes() []byte
+	FromBytes(data []byte) error
+	GetType() PduType
+}
+
 type FileDataPDU struct {
 	Header   ProtocolDataUnitHeader
 	Offset   uint16 // offset in the file data, used for segmentation
 	FileData []byte
 }
 
-func (pdu *FileDataPDU) ToBytes(dataFieldLength int16) []byte {
+func (pdu *FileDataPDU) GetType() PduType {
+	return pdu.Header.PduType
+}
+
+func (pdu *FileDataPDU) ToBytes() []byte {
 	bytes := new(buf.Buffer)
 
-	Header, error := pdu.Header.ToBytes(dataFieldLength)
+	Header, error := pdu.Header.ToBytes(int16(len(pdu.FileData)))
 	if error != nil {
 		fmt.Println("Error converting Header to bytes:", error)
 		return nil
@@ -484,10 +526,14 @@ type FileDirectivePDU struct {
 	Data    []byte
 }
 
-func (pdu FileDirectivePDU) ToBytes(dataFieldLength int16) []byte {
+func (pdu *FileDirectivePDU) GetType() PduType {
+	return pdu.Header.PduType
+}
+
+func (pdu *FileDirectivePDU) ToBytes() []byte {
 	bytes := new(buf.Buffer)
 
-	header, error := pdu.Header.ToBytes(dataFieldLength)
+	header, error := pdu.Header.ToBytes(int16(len(pdu.Data)))
 	if error != nil {
 		fmt.Println("Error converting header to bytes:", error)
 		return nil
@@ -521,7 +567,7 @@ func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
 	pdu.DirCode = DirectiveCode(dirCode)
 
 	// Read the data field
-	pdu.Data = make([]byte, pdu.Header.pduDataFieldLength-1) // -1 for the directive code byte
+	pdu.Data = make([]byte, pdu.Header.pduDataFieldLength)
 	if _, err := buf.Read(pdu.Data); err != nil {
 		return fmt.Errorf("failed to read data field: %v", err)
 	}
@@ -529,7 +575,7 @@ func (pdu *FileDirectivePDU) FromBytes(data []byte) error {
 	return nil
 }
 
-func NewFileDirectivePDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, pduType PduType, closureRequested bool, srcFileName, dstFileName string, msgs []Message) (*FileDirectivePDU, error) {
+func NewMetadataPDU(largeFileFlag bool, srcEntityID, dstEntityID uint16, transactionID uint16, pduType PduType, closureRequested bool, srcFileName, dstFileName string, msgs []Message) (*FileDirectivePDU, error) {
 	pduHeader := NewPDUHeader(largeFileFlag, srcEntityID, dstEntityID, transactionID, pduType)
 
 	pduContents := MetadataPDUContents{
@@ -739,12 +785,24 @@ func (m *MetadataPDUContents) FromBytes(data []byte, h ProtocolDataUnitHeader) e
 		}
 		switch tlv.Type {
 		case MessagesToUser:
-			r := DirectoryListingRequest{}
-			err := r.FromBytes(tlv.Value)
+			mt, err := DeserializeMessageType(tlv.Value)
 			if err != nil {
-				return fmt.Errorf("failed to deserialize MessagesToUser: %v", err)
+				return fmt.Errorf("failed to deserialize message type: %v", err)
 			}
-			m.MessagesToUser = append(m.MessagesToUser, &r)
+			var msg Message
+			switch mt {
+			case MessageTypeDirectoryRequest:
+				msg = &DirectoryListingRequest{}
+			case MessageTypeDirectoryResponse:
+				msg = &DirectoryListingResponse{}
+			default:
+				return fmt.Errorf("unknown message type: %d", mt)
+			}
+
+			if err := msg.FromBytes(tlv.Value); err != nil {
+				return fmt.Errorf("failed to deserialize message: %v", err)
+			}
+			m.MessagesToUser = append(m.MessagesToUser, msg)
 
 		default:
 			return fmt.Errorf("unknown TLV type: %d", tlv.Type)

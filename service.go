@@ -19,7 +19,7 @@ type CFPDService struct {
 	isListening bool
 }
 
-func (s *CFPDService) ProcessMessage(bytes []byte) (*messages.FileDirectivePDU, error) {
+func (s *CFPDService) ProcessMessage(bytes []byte) (messages.PDU, error) {
 	if len(bytes) == 0 {
 		return nil, fmt.Errorf("no data received")
 	}
@@ -55,6 +55,17 @@ func (s *CFPDService) ProcessMessage(bytes []byte) (*messages.FileDirectivePDU, 
 		}
 	}
 
+	if header.PduType == messages.FileData {
+		slog.Debug("Received File Data PDU", "entityID", s.Config.entityID)
+		fdp := messages.FileDataPDU{}
+		err := fdp.FromBytes(bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode File Data PDU: %v", err)
+		}
+
+		return &fdp, nil
+	}
+
 	return nil, fmt.Errorf("unsupported PDU type: %v", header.PduType)
 }
 
@@ -69,7 +80,7 @@ func (s *CFPDService) RequestBytes(p []byte, dEntityID uint16) error {
 		return fmt.Errorf("failed to resolve address %s: %w", addr, err)
 	}
 
-	slog.Debug("Sending PDU", "entityID", dEntityID, "resolved", resolved)
+	slog.Debug("Sending PDU", "from", s.Config.entityID, "to", dEntityID)
 	conn, err := net.DialUDP("udp", nil, resolved)
 	if err != nil {
 		return fmt.Errorf("failed to dial UDP: %w", err)
@@ -81,7 +92,7 @@ func (s *CFPDService) RequestBytes(p []byte, dEntityID uint16) error {
 		return fmt.Errorf("failed to send PDU: %w", err)
 	}
 
-	slog.Debug("PDU sent successfully", "entityID", dEntityID)
+	slog.Debug("PDU sent successfully", "from", s.Config.entityID, "to", dEntityID)
 	return nil
 }
 
@@ -115,12 +126,12 @@ func (s *CFPDService) Listen(e *CFDPEntity) {
 			s.isListening = false
 			break
 		}
-		fdp, err := s.ProcessMessage(buf)
+		pdu, err := s.ProcessMessage(buf)
 		if err != nil {
-			fmt.Println("Error processing message:", err)
+			slog.Info("Error processing message", "error", err, "entityID", e.ID)
 			continue
 		}
-		if err := e.HandlePDU(*fdp); err != nil {
+		if err := e.HandlePDU(pdu); err != nil {
 			fmt.Println("Error handling PDU:", err)
 		}
 	}

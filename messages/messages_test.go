@@ -260,10 +260,10 @@ func TestFileDirectivePDU_ToBytesAndFromBytes(t *testing.T) {
 	}
 
 	// The data field length is 1 byte for the directive code plus the length of the data
-	dataFieldLength := int16(1 + len(originalPDU.Data))
+	dataFieldLength := int16(len(originalPDU.Data))
 
 	// 2. Serialize
-	pduBytes := originalPDU.ToBytes(dataFieldLength)
+	pduBytes := originalPDU.ToBytes()
 	if pduBytes == nil {
 		t.Fatal("ToBytes returned nil")
 	}
@@ -461,8 +461,6 @@ func TestFileDataPDU_ToBytesAndFromBytes(t *testing.T) {
 		header.segmentMetadataFlag = false
 
 		fileData := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-		// Data field length = 2 bytes for offset + 4 bytes for file data
-		dataFieldLength := int16(2 + len(fileData))
 
 		original := &FileDataPDU{
 			Header:   header,
@@ -471,7 +469,7 @@ func TestFileDataPDU_ToBytesAndFromBytes(t *testing.T) {
 		}
 
 		// 2. Serialize
-		pduBytes := original.ToBytes(dataFieldLength)
+		pduBytes := original.ToBytes()
 
 		// 3. Deserialize
 		decoded := &FileDataPDU{}
@@ -497,8 +495,6 @@ func TestFileDataPDU_ToBytesAndFromBytes(t *testing.T) {
 		header.segmentMetadataFlag = true // Enable metadata
 
 		fileData := []byte{0xCA, 0xFE}
-		// Data field length = 1 (cont state) + 1 (meta len) + 2 (offset) + 2 (file data) = 6
-		dataFieldLength := int16(1 + 1 + 2 + len(fileData))
 
 		original := &FileDataPDU{
 			Header:   header,
@@ -507,7 +503,7 @@ func TestFileDataPDU_ToBytesAndFromBytes(t *testing.T) {
 		}
 
 		// 2. Serialize
-		pduBytes := original.ToBytes(dataFieldLength)
+		pduBytes := original.ToBytes()
 
 		// 3. Deserialize
 		decoded := &FileDataPDU{}

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	filesystem "main/filesystem"
 	"main/messages"
+	"main/statemachine"
 )
 
 type CFDPEntity struct {
@@ -12,6 +13,7 @@ type CFDPEntity struct {
 	Name    string
 	service *CFPDService
 	fs      filesystem.FS
+	sm      *statemachine.StateMachine
 }
 
 func (c CFDPEntity) GetID() uint16 {
@@ -65,19 +67,16 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 			slog.Debug("Sending Directory Request", "remote", listingRequest.DirToList, "local", listingRequest.PathToRespond, "from", c.ID, "dst", dstID)
 
 			// TODO: assign sequence number and transaction ID properly
-			pdu, err := messages.NewFileDirectivePDU(false, c.ID, dstID, 12345, messages.FileDirective, p.ClosureRequested,
+			pdu, err := messages.NewMetadataPDU(false, c.ID, dstID, 12345, messages.FileDirective, p.ClosureRequested,
 				listingRequest.PathToRespond, listingRequest.DirToList, []messages.Message{listingRequest})
 			if err != nil {
 				fmt.Println("Error creating File Directive PDU:", err)
 				return err
 			}
-			if err := c.service.RequestBytes(pdu.ToBytes(int16(len(pdu.Data))), dstID); err != nil {
+			if err := c.service.RequestBytes(pdu.ToBytes(), dstID); err != nil {
 				fmt.Println("Error sending PDU:", err)
 			}
-		case messages.MessageTypeDirectoryResponse:
-			listingResponse := msg.(*messages.DirectoryListingResponse)
-			slog.Debug("Sending Directory Response", "remote", listingResponse.PathToRespond, "local", listingResponse.DirToList, "from", c.ID, "dst", dstID)
-
+			c.sm.SetState(statemachine.WaitingForDirectoryListing)
 		default:
 			fmt.Println(c.ID, "Unknown request primitive: ", msg.GetMessageType())
 			return fmt.Errorf("unknown request primitive: %s", msg.GetMessageType())
@@ -86,70 +85,104 @@ func (c CFDPEntity) PutRequest(p PutParameters) error {
 	return nil
 }
 
-func (c CFDPEntity) ProxyOperation() {
-	fmt.Println("Performing proxy operation for CFDP entity:", c.Name)
-}
+func (c CFDPEntity) HandlePDU(pdu messages.PDU) error {
+	if pdu.GetType() == messages.FileDirective {
+		pdu := pdu.(*messages.FileDirectivePDU)
+		switch pdu.DirCode {
+		case messages.MetadataPDU:
+			slog.Debug("Handling Metadata PDU", "entityID", c.ID)
+			metadata := messages.MetadataPDUContents{}
+			err := metadata.FromBytes(pdu.Data, pdu.Header)
+			if err != nil {
+				return fmt.Errorf("failed to decode metadata: %v", err)
+			}
 
-func (c CFDPEntity) StatusReportOperation() {
-	fmt.Println("Performing status report operation for CFDP entity:", c.Name)
-}
+			if hasUploadRequest(metadata.MessagesToUser) {
+				c.sm.SetState(statemachine.SendingDirectoryListing)
+				slog.Debug("Handling Directory Listing Request", "entityID", c.ID, "remotePath", metadata.SourceFileName, "localPath", metadata.DestinationFileName)
+				return c.UploadDirectoryListing(pdu, metadata)
+			}
 
-func (c CFDPEntity) SuspendOperation() {
-	fmt.Println("Suspending CFDP entity:", c.Name)
-}
+			c.sm.SetState(statemachine.WaitingForFileData)
+			c.sm.Context.FilePath = metadata.DestinationFileName
+			return nil
 
-func (c CFDPEntity) ResumeOperation() {
-	fmt.Println("Resuming CFDP entity:", c.Name)
-}
-
-func (c CFDPEntity) HandlePDU(pdu messages.FileDirectivePDU) error {
-	switch pdu.DirCode {
-	case messages.MetadataPDU:
-		slog.Debug("Handling Metadata PDU", "entityID", c.ID)
-		metadata := messages.MetadataPDUContents{}
-		err := metadata.FromBytes(pdu.Data, pdu.Header)
-		if err != nil {
-			return fmt.Errorf("failed to decode metadata: %v", err)
+		default:
+			return fmt.Errorf("unknown directive code: %v", pdu.DirCode)
 		}
-		return c.UploadDirectoryListing(pdu, metadata)
-
-	default:
-		return fmt.Errorf("unknown directive code: %v", pdu.DirCode)
 	}
+
+	if pdu.GetType() == messages.FileData {
+		pdu := pdu.(*messages.FileDataPDU)
+		slog.Debug("Handling File Data PDU", "entityID", c.ID, "dataLength", len(pdu.FileData))
+		if c.sm.CurrentState != statemachine.WaitingForFileData {
+			return fmt.Errorf("unexpected state: %v, expected WaitingForFileData", c.sm.CurrentState)
+		}
+
+		err := c.fs.WriteFile(c.sm.Context.FilePath, pdu.FileData)
+		if err != nil {
+			return fmt.Errorf("failed to write file data: %v", err)
+		}
+		slog.Info("File data written successfully", "fileName", c.sm.Context.FilePath, "entityID", c.ID)
+		return nil
+	}
+
+	return nil
 }
 
-func (c CFDPEntity) UploadDirectoryListing(pdu messages.FileDirectivePDU, m messages.MetadataPDUContents) error {
-	slog.Info("Uploading directory listing", "local", m.DestinationFileName, "uploadTo", m.SourceFileName, "localEntity", c.ID, "remoteEntity", pdu.Header.SourceEntityID)
+func hasUploadRequest(m []messages.Message) bool {
+	for _, msg := range m {
+		if msg.GetMessageType() == messages.MessageTypeDirectoryRequest {
+			return true
+		}
+	}
+	return false
+}
 
-	_, err := c.fs.ListDirectory(m.DestinationFileName)
+func (c CFDPEntity) UploadDirectoryListing(pdu *messages.FileDirectivePDU, m messages.MetadataPDUContents) error {
+	slog.Info("Uploading directory listing", "local", m.DestinationFileName, "uploadTo", m.SourceFileName, "from", c.ID, "to", pdu.Header.SourceEntityID)
+
+	l, err := c.fs.ListDirectory(m.DestinationFileName)
 	if err != nil {
 		return fmt.Errorf("failed to list directory: %v", err)
 	}
 
-	c.PutRequest(PutParameters{
-		DstEntityID:           &pdu.Header.SourceEntityID,
-		SrcFileName:           m.DestinationFileName,
-		DestinationFileName:   m.SourceFileName,
-		SegmentationControl:   false,
-		FaultHandlerOverrides: make(map[messages.ConditionCode]messages.Action),
-		FlowLabel:             "",
-		TransmissionMode:      messages.Unacknowledged,
-		ClosureRequested:      true,
-		MessagesToUser: []messages.Message{
+	return c.CopyOperation(pdu.Header.SourceEntityID, m.DestinationFileName, m.SourceFileName, l)
+}
+
+func (c CFDPEntity) CopyOperation(dstEntityID uint16, srcFileName, dstFileName string, contents string) error {
+	slog.Debug("Copying file", "from", srcFileName, "to", dstFileName, "dstEntityID", dstEntityID, "entityID", c.ID)
+
+	pdu, err := messages.NewMetadataPDU(false, c.ID, dstEntityID, 12345, messages.FileDirective, true,
+		srcFileName, dstFileName, []messages.Message{
 			&messages.DirectoryListingResponse{
 				WasSuccessful: true,
-				DirToList:     m.DestinationFileName,
-				PathToRespond: m.SourceFileName,
+				DirToList:     dstFileName,
+				PathToRespond: srcFileName,
 			},
-			// TODO: use a proper transaction ID
-			&messages.OriginatingTransactionID{
-				SourceEntityID:            c.ID,
-				TransactionSequenceNumber: 12345,
-			},
-		},
-		FilestoreRequests: []string{},
-	})
+		})
+	if err != nil {
+		fmt.Println("Error creating File Directive PDU:", err)
+		return nil
+	}
 
+	if err := c.service.RequestBytes(pdu.ToBytes(), dstEntityID); err != nil {
+		fmt.Println("Error sending PDU:", err)
+		return err
+	}
+
+	fdp := messages.FileDataPDU{
+		Header:   messages.NewPDUHeader(false, c.ID, dstEntityID, 12345, messages.FileData),
+		FileData: []byte(contents),
+		Offset:   0,
+	}
+
+	if err := c.service.RequestBytes(fdp.ToBytes(), dstEntityID); err != nil {
+		fmt.Println("Error sending File Data PDU:", err)
+		return err
+	}
+
+	slog.Info("File data sent successfully", "fileName", dstFileName, "entityID", c.ID, "dstEntityID", dstEntityID)
 	return nil
 }
 
@@ -160,6 +193,7 @@ func NewEntity(id uint16, name string, sc ServiceConfig) CFDPEntity {
 		Name:    name,
 		service: service,
 		fs:      &filesystem.LocalFS{},
+		sm:      statemachine.NewStateMachine(),
 	}
 	service.Bind(&entity)
 	return entity
