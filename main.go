@@ -2,7 +2,6 @@ package main
 
 import (
 	"log/slog"
-	"cfdp/messages"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,53 +19,6 @@ func (r RequestType) String() string {
 		return "PutRequest"
 	default:
 		return "UnknownRequest"
-	}
-}
-
-type RequestPrimitive struct {
-	ReqType                 RequestType
-	DstEntityID             uint16
-	SrcEntityID             uint16
-	SrcFileName             string
-	DstFileName             string
-	SegmentControl          string
-	TransactionID           string
-	ConditionCode           string
-	StatusReport            string
-	FaultHandlerOverride    string
-	TransmissionMode        messages.TransmissionMode // optional
-	MessagesToUser          []messages.Message        // optional
-	FilestoreRequests       []string                  // optional
-	FilestoreResponses      []string                  // optional
-	FlowLabel               string                    // optional
-	Offset                  uint64
-	Length                  uint64
-	Progress                float64
-	ClosureRequested        bool // optional
-	FileSize                uint64
-	SegmentData             []byte // optional
-	SegmentMetadataLength   uint64 // optional
-	RecordContinuationState string // optional
-}
-
-func (r RequestPrimitive) ToBytes() []byte {
-	return []byte{}
-
-	// bytes := make(bytes.Buffer)
-
-	// // magic number
-	// bytes.WriteString("cfpd")
-
-	// // message type
-	// bytes.WriteString(r.ReqType.String())
-}
-
-func NewPutRequest(dst uint16, msgs ...messages.Message) RequestPrimitive {
-	return RequestPrimitive{
-		ReqType:          PutRequest,
-		DstEntityID:      dst,
-		MessagesToUser:   msgs,
-		TransmissionMode: messages.Unacknowledged,
 	}
 }
 
@@ -108,24 +60,6 @@ func main() {
 	app := NewCFDPApp(0, "Client", clientConf)
 	app.ListDirectory(1, "/tmp/foo.txt", "/remote")
 
-	// listingRequest := RequestPrimitive{
-	// 	ReqType:          PutRequest,
-	// 	DstEntityID:      1,
-	// 	SrcEntityID:      0,
-	// 	TransmissionMode: messages.Unacknowledged,
-	// 	MessagesToUser: []messages.Message{
-	// 		messages.NewDirectoryListingRequest("/path/to/directory", "/path/to/directory/listing.txt"),
-	// 	},
-	// }
-
-	// err := c.Request(listingRequest, 1)
-
-	// fmt.Println("CFDP ID:", s.GetID())
-	// fmt.Println("CFDP Name:", s.GetName())
-	// cfdp.ProxyOperation()
-	// cfdp.StatusReportOperation()
-	// cfdp.SuspendOperation()
-	// cfdp.ResumeOperation()
 	for {
 		// Prevent busy loop
 		time.Sleep(10000 * time.Millisecond)
